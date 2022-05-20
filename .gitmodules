@@ -1,0 +1,3 @@
+[submodule "AdaptationAnalysis"]
+	path = AdaptationAnalysis
+	url = https://github.com/ClimateAI/AdaptationAnalysis.git
