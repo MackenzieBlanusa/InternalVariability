@@ -176,8 +176,10 @@ def internal_variability(data,data_ref,variable):
     #do the 4th order polyfit
     fit = polyfit(data)
     fit = fit.rename('TREFHT_fit')
-    # calculate internal variability uncertainity via FIT method
-    internal_fit = fit.var('member_id')
+    # calculate residual
+    residual = data - fit
+    #calculate internal var via FIT
+    internal_fit = residual.var('time').mean('member_id')
     internal_fit = internal_fit.rename('internal_fit')
     
     # calculate internal variability via LE method 
