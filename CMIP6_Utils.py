@@ -6,7 +6,7 @@ import intake
 import pprint
 import xesmf
 import sys  
-sys.path.insert(0, '/home/jupyter/InternalVariability/AdaptationAnalysis')
+sys.path.insert(0, '/home/jupyter/repositories/InternalVariability/AdaptationAnalysis')
 from app.main.src.climate_projection import ClimateProjection
 from app.main.src.year_of_departure import *
 from app.main.src.datasets import *
