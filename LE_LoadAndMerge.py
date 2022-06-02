@@ -7,6 +7,10 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import intake 
 import pprint
+import sys  
+sys.path.insert(0, '/home/jupyter/InternalVariability/AdaptationAnalysis')
+from app.main.src.utils import *
+
 
 
 class LargeEnsemble():
@@ -38,17 +42,13 @@ class LargeEnsemble():
         self.variable = variable
         self.granularity = granularity
         self.lat = lat
-        self.lon = lon
+        self.lon = lon % 360
         self.bucket = bucket
         self.path = path 
         self.load = load 
         
-        # self.ds_name_hist = ds_name_hist
-        # self.ds_name_future = ds_name_future
-        # self.hist_path = f'gcs://{self.bucket}/{self.path}/{self.ds_name_hist}.zarr'
-        # self.future_path = f'gcs://{self.bucket}/{self.path}/{self.ds_name_future}.zarr'
+        # self.lon = self.convert_lon()
         
-        # define ds_name for hist and future
         lat_str = str(lat)
         lon_str = str(lon)
         hist = 'hist'
@@ -74,12 +74,20 @@ class LargeEnsemble():
 
             self.hist_path, self.future_path = self.save()
 
-    def load_cesm_lens(self):
-        self.variable
-        ...
-        # conform to CMIP conventions
-        # also check lon
-        return hist, future 
+    # def load_cesm_lens(self):
+    #     self.variable
+    #     ...
+    #     # conform to CMIP conventions
+    #     # also check lon
+    #     return hist, future 
+    
+    def drop_bounds_height(self,ds):
+        
+        """Drop coordinates like 'time_bounds' from datasets,
+        which can lead to issues when merging."""
+        drop_vars = [vname for vname in ds.coords
+                if (('_bounds') in vname ) or ('_bnds') in vname or ('height') in vname]
+        return ds.drop(drop_vars)
     
     def load_cmip6(self):
         self.variable 
@@ -96,47 +104,58 @@ class LargeEnsemble():
             )
         # load dictionary of searched datasets, comma added to ignore warnings 
         dset = cat.to_dataset_dict(zarr_kwargs={'consolidated':True}, storage_options={"anon": True});
-        # define the datasets by key
-        first_key = list(dset)[0]
-        second_key = list(dset)[1]
-        future = dset[first_key]
-        hist = dset[second_key]
-        # convert lon to -180-180 if needed
-        if any((hist.lon > 180)) or any((hist.lon < -180)):
-            # convert lon from 0-360 to -180 to 180
-            hist = hist.assign_coords(lon=((hist.lon + 180) % 360 - 180))
-            # this is necessary in order to use the .sel method=nearest 
-            hist['lon'] = hist.lon.sortby(hist.lon,ascending=True)
-        else: 
-            pass
-        # same for future
-        if any((future.lon > 180)) or any((future.lon < -180)):
-            future = future.assign_coords(lon=((future.lon + 180) % 360 - 180))
-            future['lon'] = future.lon.sortby(future.lon,ascending=True)
-        else: 
-            pass
+        # define the datasets by sorted keys
+        keys = sorted(dset.keys())
+        hist = dset[keys[0]]
+        future = dset[keys[1]]
         # select specific lat/lon
         hist = hist.sel(lat=self.lat,lon=self.lon,method='nearest')
         future = future.sel(lat=self.lat,lon=self.lon,method='nearest')
+        #chunk
+        hist = hist.chunk({'member_id': 1, 'time': -1})
+        future = future.chunk({'member_id': 1, 'time': -1})
+        #load 
+        hist = hist.load()
+        future = future.load()
+        # convert lon to -180-180 if needed
+        if hist.lon > 180 or hist.lon < -180:
+            hist = hist.assign_coords(lon=((hist.lon + 180) % 360 - 180))
+        else: 
+            pass 
+
+        if future.lon > 180 or future.lon < -180:
+            future = future.assign_coords(lon=((future.lon + 180) % 360 - 180))
+        else: 
+            pass
+        #drop bounds
+        hist = self.drop_bounds_height(ds=hist)
+        future = self.drop_bounds_height(ds=future)
         
+        # need to add in conver_calendar 
         
-        # some other modifications to make compatible
         return hist, future
 
     def save(self):
 
-        self.hist.to_zarr(
+        hist_path = self.hist.to_zarr(
             self.hist_path,
             consolidated=True,
-            safe_chunks=False
+            mode='w'
         )
         
-        self.future.to_zarr(
+        future_path = self.future.to_zarr(
             self.future_path,
             consolidated=True,
-            safe_chunks=False
+            mode='w'
         )
         return hist_path, future_path
+    
+#     def convert_lon(self,lon):
+        
+#         lon = lon % 360
+        
+#         return lon
+    
 
 
 # cesm = LargeEnsemble('cesm_lens', ...)
