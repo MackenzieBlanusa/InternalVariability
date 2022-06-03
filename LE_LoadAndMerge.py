@@ -74,12 +74,60 @@ class LargeEnsemble():
 
             self.hist_path, self.future_path = self.save()
 
-    # def load_cesm_lens(self):
-    #     self.variable
-    #     ...
-    #     # conform to CMIP conventions
-    #     # also check lon
-    #     return hist, future 
+    def load_cesm_lens(self):
+        self.variable
+        #catalog URL 
+        url = "https://raw.githubusercontent.com/NCAR/cesm-lens-aws/main/intake-catalogs/aws-cesm1-le.json"
+        raw_cat = intake.open_esm_datastore(url)
+        #Define specific search
+        cat = raw_cat.search(
+            experiment=['RCP85','20C'],
+            variable=['TREFHT'],
+            frequency=['monthly']
+            )
+        # load data into xarray datasets
+        dset = cat.to_dataset_dict(zarr_kwargs={'consolidated':True}, storage_options={"anon": True});
+        # define the datasets by sorted keys
+        keys = sorted(dset.keys())
+        hist = dset[keys[0]]
+        future = dset[keys[1]]
+        # select specific lat/lon
+        hist = hist.sel(lat=self.lat,lon=self.lon,method='nearest')
+        future = future.sel(lat=self.lat,lon=self.lon,method='nearest')
+        #chunk
+        hist = hist.chunk({'member_id': 1, 'time': -1})
+        future = future.chunk({'member_id': 1, 'time': -1})
+        #load 
+        hist = hist.load()
+        future = future.load()
+        # convert lon to -180-180 if needed
+        if hist.lon > 180 or hist.lon < -180:
+            hist = hist.assign_coords(lon=((hist.lon + 180) % 360 - 180))
+        else: 
+            pass 
+
+        if future.lon > 180 or future.lon < -180:
+            future = future.assign_coords(lon=((future.lon + 180) % 360 - 180))
+        else: 
+            pass
+        #drop bounds
+        hist = self.drop_bounds_height(ds=hist)
+        future = self.drop_bounds_height(ds=future)
+        # convert calendar 
+        hist = self.convert_calendar(ds=hist,granularity='monthly')
+        future = self.convert_calendar(ds=future,granularity='monthly')
+        #rename variables
+        future = future.rename_vars({'TREFHT':'tas'})
+        hist = hist.rename_vars({'TREFHT':'tas'})
+        # concat and split so time is in cmip convention
+        CESM = xr.concat(
+            [hist, future], dim='time'
+        )
+        hist = CESM.sel(time=slice('1920','2014'))
+        future = CESM.sel(time=slice('2015','2100'))
+        # conform to CMIP conventions
+        # also check lon
+        return hist, future 
     
     def drop_bounds_height(self,ds):
         
@@ -132,6 +180,7 @@ class LargeEnsemble():
         future = self.drop_bounds_height(ds=future)
         #slice to 2100, some models that go out to 2300 raise error when converting calendar 
         future = future.sel(time=slice('2015','2100'))
+        hist = hist.sel(time=slice('1920','2014'))
         # need to add in conver_calendar 
         hist = self.convert_calendar(ds=hist,granularity='monthly')
         future = self.convert_calendar(ds=future,granularity='monthly')
