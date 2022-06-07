@@ -308,6 +308,7 @@ class MultiModelLargeEnsemble():
         self.load = load 
         self.le_dict = self.load_large_ensembles()
         self.hist, self.future = self.merge_datasets()
+        self.internal_variability = self.compute_internal_variability()
 
     def load_large_ensembles(self):
         le_dict = {}
@@ -344,6 +345,82 @@ class MultiModelLargeEnsemble():
         future = xr.concat(future_models,dim='model')
         hist = xr.concat(hist_models,dim='model')
         return hist, future
+    
+    def polyfit(self,data):
+        """Perform 4th order polynomial fit for ensembles in CESM dataset
+
+        Parameters
+        ---------
+        data: CESM dataset 
+
+        Returns
+        -------
+        fit: dataset of CESM fitted data 
+        """
+        # create X and Y variables for the model fit 
+        X = np.arange(len(data.time))    # x variable is length of time
+        Y = data.values  # y is the temp data
+
+        # the polynomial fit (4th order)
+        Z = np.polyfit(X,Y,4)
+        fit = data.copy()
+
+        # calculate the fit using coefs from Z
+        for i, m in enumerate(fit.model):
+            p = np.poly1d(Z[:,i])
+            fit[:, i] = p(X)
+
+        return fit
+    
+    def compute_internal_variability(self):
+        """Int Var calculation
+        """
+    
+        # get reference period 
+        data_ref = self.hist.sel(time=slice('1995','2014')).resample(time='AS').mean(dim='time')
+        data_ref = data_ref.tas - 273.15   # convert to celcius 
+        data_ref = data_ref.mean(dim=('time','model','member_number')).rename('tas_ref')
+        data_ref.load()
+
+        # prepare temp data
+        data = self.future.tas - 273.15 #convert to celcius 
+        data = data.transpose()
+        # resample yearly
+        data = data.resample(time='AS').mean(dim='time')
+        #decadal rolling average 
+        data = data.rolling(time=10, center=True).mean()   #dropna not working 
+        #implicit bias correction
+        data = (data-data_ref).rename('tas')
+        #load data
+        data = data.load()
+
+        # Internal var via LE method 
+        ensemble_mean = data.mean('member_number')
+        model_le = ensemble_mean.var('model').rename('model_le')
+        internal_le = data.var('member_number')
+        internal_le = internal_le.mean(dim='model').rename('internal_le')
+        total_le = (internal_le + model_le).rename('total_le')
+        internal_le_frac = ((internal_le/total_le)*100).rename('internal_le_frac')
+        model_le_frac = ((model_le/total_le)*100).rename('model_le_frac')
+        total_direct_le = data.var(dim=('model','member_number')).rename('total_direct_le')
+
+        # Internal var via FIT method
+        data_fit = data.isel(member_number=0).rename('data_fit')  # select first ensemble member for the fit 
+        data_fit = data_fit.dropna(dim='time')   # drop nans, not sure why this only works here when you have two dimensions???
+        fit = self.polyfit(data_fit).rename('fit')
+        residual  = data_fit - fit
+        internal_fit = residual.var('time').rename('internal_fit')
+        internal_fit = internal_fit.mean()
+        model_fit = fit.var('model').rename('model_fit')
+        total_fit = (internal_fit + model_fit).rename('total_fit')
+        internal_fit_frac = ((internal_fit/total_fit)*100).rename('internal_fit_frac')
+        model_fit_frac = ((model_fit/total_fit)*100).rename('model_fit_frac')
+        total_direct_fit = data_fit.var('model').rename('total_direct_fit')
+
+        dataset = xr.merge([data_ref,data,model_le,model_le_frac,internal_le,internal_le_frac,total_le,total_direct_le,
+                             data_fit,fit,model_fit,model_fit_frac,internal_fit,internal_fit_frac,total_fit,total_direct_fit],
+                            compat='override')
+        return dataset 
 
 #     # def compute_internal_variability(self):
 
