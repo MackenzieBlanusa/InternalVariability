@@ -75,16 +75,24 @@ class LargeEnsemble():
             self.hist_path, self.future_path = self.save()
 
     def load_cesm_lens(self):
+        """TO_DO : ADD DOC STRING"""
         self.variable
         #catalog URL 
         url = "https://raw.githubusercontent.com/NCAR/cesm-lens-aws/main/intake-catalogs/aws-cesm1-le.json"
         raw_cat = intake.open_esm_datastore(url)
         #Define specific search
-        cat = raw_cat.search(
-            experiment=['RCP85','20C'],
-            variable=['TREFHT'],
-            frequency=['monthly']
-            )
+        if self.variable == 'tas':
+            cat = raw_cat.search(
+                experiment=['RCP85','20C'],
+                variable=['TREFHT'],
+                frequency=['monthly']
+                )
+        elif self.variable == 'pr':
+            cat = raw_cat.search(
+                experiment=['RCP85','20C'],
+                variable=['PRECL','PRECC'],
+                frequency=['monthly']
+                )
         # load data into xarray datasets
         dset = cat.to_dataset_dict(zarr_kwargs={'consolidated':True}, storage_options={"anon": True});
         # define the datasets by sorted keys
@@ -116,9 +124,20 @@ class LargeEnsemble():
         # convert calendar 
         hist = self.convert_calendar(ds=hist,granularity='monthly')
         future = self.convert_calendar(ds=future,granularity='monthly')
-        #rename variables
-        future = future.rename_vars({'TREFHT':'tas'})
-        hist = hist.rename_vars({'TREFHT':'tas'})
+        # for precip: calculate pr 
+        if self.variable == 'pr':
+            hist['pr'] = hist['PRECC'] + hist['PRECL']
+            future['pr'] = future['PRECC'] + future['PRECL']
+            hist = hist.drop_vars(['PRECC','PRECL'])
+            future = future.drop_vars(['PRECC','PRECL'])
+        else:
+            pass
+        #rename temp variable
+        if self.variable == 'tas':
+            future = future.rename_vars({'TREFHT':'tas'})
+            hist = hist.rename_vars({'TREFHT':'tas'})
+        else:
+            pass
         # concat and split so time is in cmip convention
         CESM = xr.concat(
             [hist, future], dim='time'
@@ -138,6 +157,7 @@ class LargeEnsemble():
         return ds.drop(drop_vars)
     
     def load_cmip6(self):
+        """TO_DO : ADD DOC STRING"""
         self.variable 
         
         # catalog URL 
@@ -188,6 +208,7 @@ class LargeEnsemble():
         return hist, future
 
     def save(self):
+        """TO_DO : ADD DOC STRING"""
 
         hist_path = self.hist.to_zarr(
             self.hist_path,
@@ -311,6 +332,7 @@ class MultiModelLargeEnsemble():
         self.internal_variability = self.compute_internal_variability()
 
     def load_large_ensembles(self):
+        """TO_DO : ADD DOC STRING"""
         le_dict = {}
         for model in self.models:
             le = LargeEnsemble(model_name=model, variable=self.variable, granularity=self.granularity,
@@ -319,7 +341,7 @@ class MultiModelLargeEnsemble():
         return le_dict
 
     def merge_datasets(self):
-        # this is ugly but it works 
+        """TO_DO : ADD DOC STRING"""
         hist_models = []
         future_models = []
         for model in self.models:
@@ -329,7 +351,7 @@ class MultiModelLargeEnsemble():
             hist = hist.expand_dims('model')
             member_number = np.arange(0,len(hist.member_id),1)
             hist = hist.assign_coords({'member_number':member_number})
-            hist['tas'] = hist.tas.swap_dims({'member_id':'member_number'})
+            hist[self.variable] = hist[self.variable].swap_dims({'member_id':'member_number'})
             hist['member_id'] = hist.member_id.swap_dims({'member_id':'member_number'})
             hist_models.append(hist)
 
@@ -339,7 +361,7 @@ class MultiModelLargeEnsemble():
             future = future.expand_dims('model')
             member_number = np.arange(0,len(future.member_id),1)
             future = future.assign_coords({'member_number':member_number})
-            future['tas'] = future.tas.swap_dims({'member_id':'member_number'})
+            future[self.variable] = future[self.variable].swap_dims({'member_id':'member_number'})
             future['member_id'] = future.member_id.swap_dims({'member_id':'member_number'})
             future_models.append(future)
         future = xr.concat(future_models,dim='model')
@@ -374,23 +396,35 @@ class MultiModelLargeEnsemble():
     
     def compute_internal_variability(self):
         """Int Var calculation
+        TO_DO : ADD DOC STRING
         """
     
         # get reference period 
-        data_ref = self.hist.sel(time=slice('1995','2014')).resample(time='AS').mean(dim='time')
-        data_ref = data_ref.tas - 273.15   # convert to celcius 
-        data_ref = data_ref.mean(dim=('time','model','member_number')).rename('tas_ref')
+        data_ref = self.hist[self.variable]
+        data_ref = data_ref.sel(time=slice('1995','2014')).resample(time='AS').mean(dim='time')
+        if self.variable == 'tas':
+            data_ref = data_ref - 273.15   # convert to celcius 
+        else: 
+            pass 
+        data_ref = data_ref.mean(dim=('time','model','member_number')).rename(self.variable+'_ref')
         data_ref.load()
 
         # prepare temp data
-        data = self.future.tas - 273.15 #convert to celcius 
-        data = data.transpose()
+        data = self.future[self.variable]
+        if self.variable == 'tas':
+            data = data - 273.15 #convert to celcius 
+        else:
+            pass
+        data = data.transpose()    # need to transpose for polyfit, time needs to be first dimension
         # resample yearly
         data = data.resample(time='AS').mean(dim='time')
         #decadal rolling average 
         data = data.rolling(time=10, center=True).mean()   #dropna not working 
         #implicit bias correction
-        data = (data-data_ref).rename('tas')
+        if self.variable == 'tas':
+            data = (data-data_ref).rename(self.variable)
+        elif self.variable == 'pr':
+            data = (((data-data_ref)/data_ref)*100).rename(self.variable)      #percent change (not sure if this is right, getting weird results)
         #load data
         data = data.load()
 
@@ -419,12 +453,10 @@ class MultiModelLargeEnsemble():
 
         dataset = xr.merge([data_ref,data,model_le,model_le_frac,internal_le,internal_le_frac,total_le,total_direct_le,
                              data_fit,fit,model_fit,model_fit_frac,internal_fit,internal_fit_frac,total_fit,total_direct_fit],
-                            compat='override')
+                            compat='override')    #not sure if its ok to do compat = overrride, if i dont do this I get an error about member_id 
+                                                    # but member_id doesnt matter because we are going by member_number 
         return dataset 
 
-#     # def compute_internal_variability(self):
-
-# mmle = MultiModelLargeEnsemble([list of models], ...)
 
 
 
