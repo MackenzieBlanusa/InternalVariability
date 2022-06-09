@@ -415,7 +415,7 @@ class MultiModelLargeEnsemble():
         # get reference period 
         data_ref = self.hist[self.variable]
         data_ref = data_ref.load()
-        dataset[self.variable+'_ref'] = data_ref.sel(time=slice('1995','2014')).resample(time='AS').mean(dim='time').mean(dim=('time','model','member'))
+        dataset[self.variable+'_ref'] = data_ref.sel(time=slice('1995','2014')).resample(time='AS').mean(dim='time').mean(dim=('time','member'))
 
         # prepare temp data
         data = self.future[self.variable]
