@@ -69,17 +69,21 @@ class LargeEnsemble():
         url = "https://raw.githubusercontent.com/NCAR/cesm-lens-aws/main/intake-catalogs/aws-cesm1-le.json"
         raw_cat = intake.open_esm_datastore(url)
         #Define specific search
+        if self.granularity == "Amon":
+            frequency = 'monthly'
+        elif self.granularity == "day":
+            frequency = 'daily'
         if self.variable == 'tas':
             cat = raw_cat.search(
                 experiment=['RCP85','20C'],
                 variable=['TREFHT'],
-                frequency=['monthly']
+                frequency=frequency
                 )
         elif self.variable == 'pr':
             cat = raw_cat.search(
                 experiment=['RCP85','20C'],
                 variable=['PRECL','PRECC'],
-                frequency=['monthly']
+                frequency=frequency
                 )
         # load data into xarray datasets
         dset = cat.to_dataset_dict(zarr_kwargs={'consolidated':True}, storage_options={"anon": True});
@@ -87,8 +91,8 @@ class LargeEnsemble():
         keys = sorted(dset.keys())
         hist = self.process_dataset(dataset=dset[keys[0]])
         future = self.process_dataset(dataset=dset[keys[1]])
-        future = self.convert_calendar(future,granularity='monthly')
-        hist = self.convert_calendar(hist,granularity='monthly')
+        future = self.convert_calendar(future,granularity=frequency)
+        hist = self.convert_calendar(hist,granularity=frequency)
         # for precip: calculate pr 
         if self.variable == 'pr':
             hist = self.cesm_total_precip(ds=hist)
@@ -146,8 +150,13 @@ class LargeEnsemble():
         #slice to 2100, some models that go out to 2300 raise error when converting calendar 
         future = future.sel(time=slice('2015','2100'))
         hist = hist.sel(time=slice('1920','2014'))
-        future = self.convert_calendar(future,granularity='monthly')
-        hist = self.convert_calendar(hist,granularity='monthly')
+        if self.granularity == 'Amon':
+            future = self.convert_calendar(future,granularity='monthly')
+            hist = self.convert_calendar(hist,granularity='monthly')
+        elif self.granularity == 'Day':
+            future = self.convert_calendar(future,granularity='daily')
+            hist = self.convert_calendar(hist,granularity='daily')
+            
         
         return hist, future
     
@@ -278,7 +287,7 @@ class MultiModelLargeEnsemble():
         self.load = load 
         self.le_dict = self.load_large_ensembles()
         self.hist, self.future = self.merge_datasets()
-        self.internal_variability = self.compute_internal_variability()
+        # self.internal_variability = self.compute_internal_variability()
 
     def load_large_ensembles(self):
         """TO_DO : ADD DOC STRING"""
