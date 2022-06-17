@@ -327,37 +327,17 @@ class MultiModelLargeEnsemble():
         return le_dict
 
     
-    def merge_datasets(self):  #make this into smaller function
+    def merge_datasets(self):  
         """TO_DO : ADD DOC STRING"""
         hist_models = []
         future_models = []
         for model in self.models:
             hist = self.le_dict[model].hist
-            hist = hist.assign_coords(model=model)
-            hist = hist.expand_dims('model')
-            hist = hist.drop(['lat','lon'])
-            member = np.arange(0,len(hist.member_id),1)
-            hist = hist.assign_coords({'member':member})
-            hist[self.variable] = hist[self.variable].swap_dims({'member_id':'member'})
-            hist['member_id'] = hist.member_id.swap_dims({'member_id':'member'})
-            hist['time'] = hist.time.values.astype('datetime64[D]')
-            if self.variable == 'tas':
-                hist[self.variable] = hist[self.variable] - 273.15
-            # hist = self.prepare_merging(ds=hist)
+            hist = self.prepare_merge(model=model,data=hist)
             hist_models.append(hist)
 
             future = self.le_dict[model].future
-            future = future.assign_coords(model=model)
-            future = future.expand_dims('model')
-            future = future.drop(['lat','lon'])
-            member = np.arange(0,len(future.member_id),1)
-            future = future.assign_coords({'member':member})
-            future[self.variable] = future[self.variable].swap_dims({'member_id':'member'})
-            future['member_id'] = future.member_id.swap_dims({'member_id':'member'})
-            future['time'] = future.time.values.astype('datetime64[D]')
-            if self.variable == 'tas':
-                future[self.variable] = future[self.variable] - 273.15
-            # future = self.prepare_merging(ds=future)
+            future = self.prepare_merge(model=model,data=future)
             future_models.append(future)
         future = xr.concat(future_models,dim='model')
         hist = xr.concat(hist_models,dim='model')
@@ -365,18 +345,23 @@ class MultiModelLargeEnsemble():
         future = future.load()
         return hist, future
     
-#     def prepare_merging(self,ds):   #this isnt working, fix later
-#         """Doc String
-#         """
-#         ds = ds.drop(['lat','lon'])
-#         member = np.arange(0,len(ds.member_id),1)
-#         ds = ds.assign_coords({'member_number':member})
-#         ds[self.variable] = ds[self.variable].swap_dims({'member_id':'member'})     
-#         ds['member_id'] = ds.member_id.swap_dims({'member_id':'member'})
-#         if self.variable == 'tas':
-#             ds[self.variable] = ds[self.variable] - 273.15
-            
-#         return ds
+    def prepare_merge(self,model,data):
+        """Prepare CMIP and CESM for merging
+        """
+        dataset = data.drop(['lat','lon'])
+        dataset = dataset.assign_coords(model=model)
+        dataset = dataset.expand_dims('model')
+        member = np.arange(0,len(data.member_id),1)
+        dataset = dataset.assign_coords({'member':member})
+        dataset[self.variable] = dataset[self.variable].swap_dims({'member_id':'member'})
+        dataset['member_id'] = dataset.member_id.swap_dims({'member_id':'member'})
+        dataset['time'] = dataset.time.values.astype('datetime64[D]')
+        if self.variable == 'tas':
+            dataset[self.variable] = dataset[self.variable] - 273.15
+
+        return dataset
+    
+
     
     def polyfit(self,data):
         """Perform 4th order polynomial fit for ensembles in CESM dataset
