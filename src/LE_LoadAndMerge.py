@@ -43,7 +43,7 @@ class LargeEnsemble():
         self.load = load 
         
         lat_str = str(lat)
-        lon_str = str(lon)
+        lon_str = str(lon if lon  <= 180 else lon - 360)
         
         # define using self
         self.ds_name_hist = f'{self.model_name}_{self.granularity}_hist_{self.variable}_{lat_str}_{lon_str}'
@@ -315,6 +315,7 @@ class MultiModelLargeEnsemble():
             if self.variable == 'tas':
                 hist[self.variable] = hist[self.variable] - 273.15
             # hist = self.prepare_merging(ds=hist)
+            hist = hist.assign_coords({'time': hist.time.values.astype('datetime64[D]')})
             hist_models.append(hist)
 
             future = self.le_dict[model].future
@@ -328,6 +329,7 @@ class MultiModelLargeEnsemble():
             if self.variable == 'tas':
                 future[self.variable] = future[self.variable] - 273.15
             # future = self.prepare_merging(ds=future)
+            future = future.assign_coords({'time': future.time.values.astype('datetime64[D]')})
             future_models.append(future)
         future = xr.concat(future_models,dim='model')
         hist = xr.concat(hist_models,dim='model')
