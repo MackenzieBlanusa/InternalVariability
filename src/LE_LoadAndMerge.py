@@ -7,6 +7,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import intake 
 import pprint
+import cftime 
+import psutil
 
 class LargeEnsemble():
     def __init__(self, model_name, variable, granularity, lat, lon, bucket, path, 
@@ -43,13 +45,16 @@ class LargeEnsemble():
         self.load = load 
         
         lat_str = str(lat)
-        lon_str = str(lon if lon  <= 180 else lon - 360)
+        lon_str = str(self.lon)
         
         # define using self
         self.ds_name_hist = f'{self.model_name}_{self.granularity}_hist_{self.variable}_{lat_str}_{lon_str}'
         self.ds_name_future = f'{self.model_name}_{self.granularity}_future_{self.variable}_{lat_str}_{lon_str}'
         self.hist_path = f'gcs://{self.bucket}/{self.path}/{self.ds_name_hist}.zarr'
         self.future_path = f'gcs://{self.bucket}/{self.path}/{self.ds_name_future}.zarr'
+        
+        print(self.hist_path)
+        print(self.future_path)
         
         # load the saved data or retrieve the data 
         if load:
@@ -79,12 +84,19 @@ class LargeEnsemble():
                 variable=['TREFHT'],
                 frequency=frequency
                 )
-        elif self.variable == 'pr':
+        elif self.variable == 'pr' and self.granularity=='Amon':
             cat = raw_cat.search(
                 experiment=['RCP85','20C'],
                 variable=['PRECL','PRECC'],
                 frequency=frequency
                 )
+        elif self.variable == 'pr' and self.granularity == 'day':
+            cat = raw_cat.search(
+                experiment=['RCP85','20C'],
+                variable=['PRECT'],
+                frequency=frequency
+                )
+            
         # load data into xarray datasets
         dset = cat.to_dataset_dict(zarr_kwargs={'consolidated':True}, storage_options={"anon": True});
         # define the datasets by sorted keys
@@ -94,9 +106,14 @@ class LargeEnsemble():
         future = self.convert_calendar(future,granularity=frequency)
         hist = self.convert_calendar(hist,granularity=frequency)
         # for precip: calculate pr 
-        if self.variable == 'pr':
+        if self.variable == 'pr' and self.granularity == 'Amon':
             hist = self.cesm_total_precip(ds=hist)
             future = self.cesm_total_precip(ds=future)
+        elif self.variable == 'pr' and self.granularity == 'day':
+            future = future.rename_vars({'PRECT':'pr'})
+            hist = hist.rename_vars({'PRECT':'pr'})
+            future['pr'] = future.pr * 997
+            hist['pr'] = hist.pr * 997  #unit conversion
         #rename temp variable
         elif self.variable == 'tas':
             future = future.rename_vars({'TREFHT':'tas'})
@@ -113,7 +130,7 @@ class LargeEnsemble():
     def cesm_total_precip(self,ds):
         """Doc String
         """
-        ds['pr'] = ds['PRECC'] + ds['PRECL']
+        ds['pr'] = (ds['PRECC'] + ds['PRECL'])*997 # unit conversion 
         ds = ds.drop_vars(['PRECC','PRECL'])
         # CESM precip units are in m/s and CMIP are in kg m^-2 s^-1, I could get CESM units to CMIP units by multiplying by density of water
         # but density of water is ~1 so this wouldnt do anything. Getting weird results for CESM precip right now. 
@@ -153,7 +170,7 @@ class LargeEnsemble():
         if self.granularity == 'Amon':
             future = self.convert_calendar(future,granularity='monthly')
             hist = self.convert_calendar(hist,granularity='monthly')
-        elif self.granularity == 'Day':
+        elif self.granularity == 'day':
             future = self.convert_calendar(future,granularity='daily')
             hist = self.convert_calendar(hist,granularity='daily')
             
@@ -168,7 +185,12 @@ class LargeEnsemble():
         #chunk
         dataset = dataset.chunk({'member_id': 1, 'time': -1})
         #load 
-        dataset = dataset.load()
+        dss = []
+        for member_id in dataset.member_id:
+            ds = dataset.sel(member_id = member_id).load()
+            dss.append(ds)
+            print(psutil.virtual_memory()[3] / 1024 / 1024 / 1024)
+        dataset = xr.concat(dss,'member_id')
         # convert lon to -180-180 if needed
         if dataset.lon > 180 or dataset.lon < -180:
             dataset = dataset.assign_coords(lon=((dataset.lon + 180) % 360 - 180))
@@ -253,7 +275,7 @@ class LargeEnsemble():
         return ds
 
 class MultiModelLargeEnsemble():
-    def __init__(self, models, variable, granularity, lat, lon, bucket, path,
+    def __init__(self, models, variable, granularity, lat, lon, bucket, path, q, rolling_average,
                  load=False):
         """Multi Model Large Ensemble class used to get CMIP6 and CESM data, and merge.
         
@@ -281,13 +303,19 @@ class MultiModelLargeEnsemble():
         self.variable = variable
         self.granularity = granularity
         self.lat = lat
-        self.lon = lon % 360
+        self.lon = lon
         self.bucket = bucket
         self.path = path 
+        self.q = q
+        self.rolling_average = rolling_average
         self.load = load 
         self.le_dict = self.load_large_ensembles()
         self.hist, self.future = self.merge_datasets()
-        # self.internal_variability = self.compute_internal_variability()
+        if self.granularity == 'Amon':
+            self.internal_variability = self.compute_internal_variability()
+        elif self.granularity == 'day':
+            self.occurance_hist, self.occurance_future = self.quantile_occurance()
+            self.extreme_internal = self.extreme_internal_variability()
 
     def load_large_ensembles(self):
         """TO_DO : ADD DOC STRING"""
@@ -299,54 +327,41 @@ class MultiModelLargeEnsemble():
         return le_dict
 
     
-    def merge_datasets(self):  #make this into smaller function
+    def merge_datasets(self):  
         """TO_DO : ADD DOC STRING"""
         hist_models = []
         future_models = []
         for model in self.models:
             hist = self.le_dict[model].hist
-            hist = hist.assign_coords(model=model)
-            hist = hist.expand_dims('model')
-            hist = hist.drop(['lat','lon'])
-            member = np.arange(0,len(hist.member_id),1)
-            hist = hist.assign_coords({'member':member})
-            hist[self.variable] = hist[self.variable].swap_dims({'member_id':'member'})
-            hist['member_id'] = hist.member_id.swap_dims({'member_id':'member'})
-            if self.variable == 'tas':
-                hist[self.variable] = hist[self.variable] - 273.15
-            # hist = self.prepare_merging(ds=hist)
-            hist = hist.assign_coords({'time': hist.time.values.astype('datetime64[D]')})
+            hist = self.prepare_merge(model=model,data=hist)
             hist_models.append(hist)
 
             future = self.le_dict[model].future
-            future = future.assign_coords(model=model)
-            future = future.expand_dims('model')
-            future = future.drop(['lat','lon'])
-            member = np.arange(0,len(future.member_id),1)
-            future = future.assign_coords({'member':member})
-            future[self.variable] = future[self.variable].swap_dims({'member_id':'member'})
-            future['member_id'] = future.member_id.swap_dims({'member_id':'member'})
-            if self.variable == 'tas':
-                future[self.variable] = future[self.variable] - 273.15
-            # future = self.prepare_merging(ds=future)
-            future = future.assign_coords({'time': future.time.values.astype('datetime64[D]')})
+            future = self.prepare_merge(model=model,data=future)
             future_models.append(future)
         future = xr.concat(future_models,dim='model')
         hist = xr.concat(hist_models,dim='model')
+        hist = hist.load()
+        future = future.load()
         return hist, future
     
-#     def prepare_merging(self,ds):   #this isnt working, fix later
-#         """Doc String
-#         """
-#         ds = ds.drop(['lat','lon'])
-#         member = np.arange(0,len(ds.member_id),1)
-#         ds = ds.assign_coords({'member_number':member})
-#         ds[self.variable] = ds[self.variable].swap_dims({'member_id':'member'})     
-#         ds['member_id'] = ds.member_id.swap_dims({'member_id':'member'})
-#         if self.variable == 'tas':
-#             ds[self.variable] = ds[self.variable] - 273.15
-            
-#         return ds
+    def prepare_merge(self,model,data):
+        """Prepare CMIP and CESM for merging
+        """
+        dataset = data.drop(['lat','lon'])
+        dataset = dataset.assign_coords(model=model)
+        dataset = dataset.expand_dims('model')
+        member = np.arange(0,len(data.member_id),1)
+        dataset = dataset.assign_coords({'member':member})
+        dataset[self.variable] = dataset[self.variable].swap_dims({'member_id':'member'})
+        dataset['member_id'] = dataset.member_id.swap_dims({'member_id':'member'})
+        dataset['time'] = dataset.time.values.astype('datetime64[D]')
+        if self.variable == 'tas':
+            dataset[self.variable] = dataset[self.variable] - 273.15
+
+        return dataset
+    
+
     
     def polyfit(self,data):
         """Perform 4th order polynomial fit for ensembles in CESM dataset
@@ -426,7 +441,7 @@ class MultiModelLargeEnsemble():
         # get reference period 
         data_ref = self.hist[self.variable]
         data_ref = data_ref.load()
-        dataset[self.variable+'_ref'] = data_ref.sel(time=slice('1995','2014')).resample(time='AS').mean(dim='time').mean(dim=('time','member'))
+        dataset[self.variable+'_ref'] = data_ref.resample(time='AS').mean(dim='time').mean(dim=('time','member'))
 
         # prepare temp data
         data = self.future[self.variable]
@@ -448,21 +463,64 @@ class MultiModelLargeEnsemble():
         dataset['internal_le'] = self.compute_internalLE(data=dataset[self.variable])
         dataset['total_le'] = self.compute_total_uncertainty(internal=dataset['internal_le'],model=dataset['model_le'])
         dataset['total_direct_le'] = self.compute_total_direct(data=dataset[self.variable])
-        dataset['internal_le_frac'],dataset['model_le_frac'] = self.compute_percent_contribution(internal=dataset['internal_le'],
-                                                                                            model=dataset['model_le'],
-                                                                                            total = dataset['total_le'])
+        dataset['internal_le_frac'],dataset['model_le_frac']=self.compute_percent_contribution(internal=dataset['internal_le'],
+                                                                                               model=dataset['model_le'],
+                                                                                               total = dataset['total_le'])
         # Internal var via FIT method
         dataset['fit'] = self.get_fit(data=dataset[self.variable])
         dataset['internal_fit'] = self.compute_internalFIT(data=dataset[self.variable].isel(member=0),
-                                                      fit = dataset['fit'])
+                                                           fit = dataset['fit'])
         dataset['model_fit'] = self.compute_modelFIT(fit=dataset['fit'])
         dataset['total_fit'] = self.compute_total_uncertainty(internal=dataset['internal_fit'],model=dataset['model_fit'])
-        dataset['internal_fit_frac'],dataset['model_fit_frac'] = self.compute_percent_contribution(internal=dataset['internal_fit'],
-                                                                                              model=dataset['model_fit'],
-                                                                                              total = dataset['total_fit'])
+        dataset['internal_fit_frac'],dataset['model_fit_frac']= self.compute_percent_contribution(internal=dataset['internal_fit'],
+                                           model=dataset['model_fit'],
+                                           total = dataset['total_fit'])
         dataset['total_direct_fit'] = self.compute_totaldirect_fit(data=dataset[self.variable].isel(member=0))
  
         return dataset 
+
+    def quantile_occurance(self):
+    
+        hist = self.hist[self.variable].sel(time=slice('1995','2014')) # do we want to use the full 1920-2014 period? 
+        future = self.future[self.variable]
+        quantile = hist.quantile(self.q, ('time','member'))
+        occurance_hist = hist > quantile
+        occurance_hist = occurance_hist.where(np.isfinite(hist), np.NaN)
+        occurance_future = future > quantile
+        occurance_future = occurance_future.where(np.isfinite(future), np.NaN)
+
+        return occurance_hist, occurance_future
+
+
+    def extreme_internal_variability(self):
+    
+        dataset = xr.Dataset()
+
+        occurance = self.occurance_future.resample(time='AS').mean().rolling(time=self.rolling_average, center=True).mean()
+        dataset[self.variable+'_occurance'] = occurance 
+
+            # Internal var via LE method 
+        dataset['model_le'] = self.compute_modelLE(data=dataset[self.variable+'_occurance'])
+        dataset['internal_le'] = self.compute_internalLE(data=dataset[self.variable+'_occurance'])
+        dataset['total_le'] = self.compute_total_uncertainty(internal=dataset['internal_le'],
+                                                             model=dataset['model_le'])
+        dataset['total_direct_le'] = self.compute_total_direct(data=dataset[self.variable+'_occurance'])
+        dataset['internal_le_frac'],dataset['model_le_frac']= self.compute_percent_contribution(internal=dataset['internal_le'],
+                                      model=dataset['model_le'],
+                                      total = dataset['total_le'])
+        # Internal var via FIT method
+        dataset['fit'] = self.get_fit(data=dataset[self.variable+'_occurance'].T)
+        dataset['internal_fit'] = self.compute_internalFIT(data=dataset[self.variable+'_occurance'].isel(member=0),
+                                                               fit = dataset['fit'])
+        dataset['model_fit'] = self.compute_modelFIT(fit=dataset['fit'])
+        dataset['total_fit'] = self.compute_total_uncertainty(internal=dataset['internal_fit'],
+                                                              model=dataset['model_fit'])
+        dataset['internal_fit_frac'],dataset['model_fit_frac']= self.compute_percent_contribution(internal=dataset['internal_fit'],
+                                      model=dataset['model_fit'],
+                                      total = dataset['total_fit'])
+        dataset['total_direct_fit'] = self.compute_totaldirect_fit(data=dataset[self.variable+'_occurance'].isel(member=0))
+
+        return dataset
 
         
 
