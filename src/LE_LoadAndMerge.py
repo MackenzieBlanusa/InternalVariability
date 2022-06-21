@@ -314,11 +314,11 @@ class MultiModelLargeEnsemble():
         self.load = load 
         self.le_dict = self.load_large_ensembles()
         self.hist, self.future = self.merge_datasets()
-        if self.granularity == 'Amon':
-            self.internal_variability = self.compute_internal_variability()
-        elif self.granularity == 'day':
-            self.occurance_hist, self.occurance_future = self.quantile_occurance()
-            self.extreme_internal = self.extreme_internal_variability()
+#         if self.granularity == 'Amon':
+#             self.internal_variability = self.compute_internal_variability()
+#         elif self.granularity == 'day':
+#             self.occurance_hist, self.occurance_future = self.quantile_occurance()
+#             self.extreme_internal = self.extreme_internal_variability()
 
     def load_large_ensembles(self):
         """TO_DO : ADD DOC STRING"""
@@ -484,22 +484,23 @@ class MultiModelLargeEnsemble():
         return dataset
 
 
-    def quantile_occurance(self):
+    def quantile_occurance(self, return_period, conseq_days=1, coarsen=1, 
+                           hist_slice=slice(None, None)):
 
-        hist = self.hist[self.variable].sel(time=self.hist_slice)
+        hist = self.hist[self.variable].sel(time=hist_slice)
         future = self.future[self.variable]
-
-        # find number of expected events in period covered by x
-        expected_events = len(hist.time) / 365.25 / self.return_period
-        q = 1 - expected_events / len(hist.time)
-
+        
         #rolling average 
-        hist = hist.rolling(time=self.conseq_days, center=True).mean()
-        future = future.rolling(time=self.conseq_days, center=True).mean()
+        hist = hist.rolling(time=conseq_days, center=True).mean()
+        future = future.rolling(time=conseq_days, center=True).mean()
 
         #coarsen 
-        hist = hist.coarsen(time=self.coarsen,boundary='trim').max()
-        future = future.coarsen(time=self.coarsen,boundary='trim').max()
+        hist = hist.coarsen(time=coarsen,boundary='trim').max()
+        future = future.coarsen(time=coarsen,boundary='trim').max()
+        
+        # find number of expected events in period covered by x
+        expected_events = len(np.unique(hist.time.dt.year)) / return_period
+        q = 1 - expected_events / len(hist.time)
 
         # get quantile 
         quantile = hist.quantile(q, ('time','member'))
@@ -527,33 +528,45 @@ class MultiModelLargeEnsemble():
 
 
 
-    def extreme_internal_variability(self):
+    def extreme_internal_variability(self, return_period, conseq_days=1, coarsen=1, 
+                           hist_slice=slice(None, None), rolling_average=10):
     
         dataset = xr.Dataset()
-
-        occurance = self.occurance_future.resample(time='AS').mean().rolling(time=self.rolling_average, center=True).mean()
+        
+        occurance_hist, occurance_future = self.quantile_occurance(
+            return_period=return_period,
+            conseq_days=conseq_days,
+            coarsen=coarsen,
+            hist_slice=hist_slice
+        )
+        
+        occurance = occurance_future.resample(time='AS').mean().rolling(
+            time=rolling_average, center=True).mean()
         dataset[self.variable+'_occurance'] = occurance 
 
-            # Internal var via LE method 
-        dataset['model_le'] = self.compute_modelLE(data=dataset[self.variable+'_occurance'])
-        dataset['internal_le'] = self.compute_internalLE(data=dataset[self.variable+'_occurance'])
-        dataset['total_le'] = self.compute_total_uncertainty(internal=dataset['internal_le'],
-                                                             model=dataset['model_le'])
-        dataset['total_direct_le'] = self.compute_total_direct(data=dataset[self.variable+'_occurance'])
-        dataset['internal_le_frac'],dataset['model_le_frac']= self.compute_percent_contribution(internal=dataset['internal_le'],
-                                      model=dataset['model_le'],
-                                      total = dataset['total_le'])
+        # Internal var via LE method 
+        dataset['model_le'] = self.compute_modelLE(
+            data=dataset[self.variable+'_occurance'])
+        dataset['internal_le'] = self.compute_internalLE(
+            data=dataset[self.variable+'_occurance'])
+        dataset['total_le'] = self.compute_total_uncertainty(
+            internal=dataset['internal_le'], model=dataset['model_le'])
+        dataset['total_direct_le'] = self.compute_total_direct(
+            data=dataset[self.variable+'_occurance'])
+        dataset['internal_le_frac'], dataset['model_le_frac']= self.compute_percent_contribution(
+            internal=dataset['internal_le'], model=dataset['model_le'], total=dataset['total_le'])
+        
         # Internal var via FIT method
         dataset['fit'] = self.get_fit(data=dataset[self.variable+'_occurance'].T)
-        dataset['internal_fit'] = self.compute_internalFIT(data=dataset[self.variable+'_occurance'].isel(member=0),
-                                                               fit = dataset['fit'])
+        dataset['internal_fit'] = self.compute_internalFIT(
+            data=dataset[self.variable+'_occurance'].isel(member=0), fit=dataset['fit'])
         dataset['model_fit'] = self.compute_modelFIT(fit=dataset['fit'])
-        dataset['total_fit'] = self.compute_total_uncertainty(internal=dataset['internal_fit'],
-                                                              model=dataset['model_fit'])
-        dataset['internal_fit_frac'],dataset['model_fit_frac']= self.compute_percent_contribution(internal=dataset['internal_fit'],
-                                      model=dataset['model_fit'],
-                                      total = dataset['total_fit'])
-        dataset['total_direct_fit'] = self.compute_totaldirect_fit(data=dataset[self.variable+'_occurance'].isel(member=0))
+        dataset['total_fit'] = self.compute_total_uncertainty(
+            internal=dataset['internal_fit'], model=dataset['model_fit'])
+        dataset['internal_fit_frac'], dataset['model_fit_frac']= self.compute_percent_contribution(
+            internal=dataset['internal_fit'], model=dataset['model_fit'], total=dataset['total_fit'])
+        dataset['total_direct_fit'] = self.compute_totaldirect_fit(
+            data=dataset[self.variable+'_occurance'].isel(member=0))
 
         return dataset
 
