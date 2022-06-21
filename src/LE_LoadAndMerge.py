@@ -53,8 +53,8 @@ class LargeEnsemble():
         self.hist_path = f'gcs://{self.bucket}/{self.path}/{self.ds_name_hist}.zarr'
         self.future_path = f'gcs://{self.bucket}/{self.path}/{self.ds_name_future}.zarr'
         
-        print(self.hist_path)
-        print(self.future_path)
+        # print(self.hist_path)
+        # print(self.future_path)
         
         # load the saved data or retrieve the data 
         if load:
@@ -275,8 +275,8 @@ class LargeEnsemble():
         return ds
 
 class MultiModelLargeEnsemble():
-    def __init__(self, models, variable, granularity, lat, lon, bucket, path, q, rolling_average,
-                 load=False):
+    def __init__(self, models, variable, granularity, lat, lon, bucket, path, return_period, hist_slice, coarsen,
+                 conseq_days, rolling_average,load=False):
         """Multi Model Large Ensemble class used to get CMIP6 and CESM data, and merge.
         
         Parameters
@@ -306,7 +306,10 @@ class MultiModelLargeEnsemble():
         self.lon = lon
         self.bucket = bucket
         self.path = path 
-        self.q = q
+        self.return_period = return_period
+        self.hist_slice = hist_slice
+        self.coarsen = coarsen
+        self.conseq_days = conseq_days 
         self.rolling_average = rolling_average
         self.load = load 
         self.le_dict = self.load_large_ensembles()
@@ -441,6 +444,7 @@ class MultiModelLargeEnsemble():
         # get reference period 
         data_ref = self.hist[self.variable]
         data_ref = data_ref.load()
+        data_ref = data_ref.sel(time=slice('1995','2014'))
         dataset[self.variable+'_ref'] = data_ref.resample(time='AS').mean(dim='time').mean(dim=('time','member'))
 
         # prepare temp data
@@ -477,19 +481,50 @@ class MultiModelLargeEnsemble():
                                            total = dataset['total_fit'])
         dataset['total_direct_fit'] = self.compute_totaldirect_fit(data=dataset[self.variable].isel(member=0))
  
-        return dataset 
+        return dataset
+
 
     def quantile_occurance(self):
-    
-        hist = self.hist[self.variable].sel(time=slice('1995','2014')) # do we want to use the full 1920-2014 period? 
+
+        hist = self.hist[self.variable].sel(time=self.hist_slice)
         future = self.future[self.variable]
-        quantile = hist.quantile(self.q, ('time','member'))
+
+        # find number of expected events in period covered by x
+        expected_events = len(hist.time) / 365.25 / self.return_period
+        q = 1 - expected_events / len(hist.time)
+
+        #rolling average 
+        hist = hist.rolling(time=self.conseq_days, center=True).mean()
+        future = future.rolling(time=self.conseq_days, center=True).mean()
+
+        #coarsen 
+        hist = hist.coarsen(time=self.coarsen,boundary='trim').max()
+        future = future.coarsen(time=self.coarsen,boundary='trim').max()
+
+        # get quantile 
+        quantile = hist.quantile(q, ('time','member'))
         occurance_hist = hist > quantile
         occurance_hist = occurance_hist.where(np.isfinite(hist), np.NaN)
         occurance_future = future > quantile
         occurance_future = occurance_future.where(np.isfinite(future), np.NaN)
 
         return occurance_hist, occurance_future
+
+
+
+#     def quantile_occurance(self):
+    
+#         hist = self.hist[self.variable].sel(time=slice('1995','2014')) # do we want to use the full 1920-2014 period? 
+#         future = self.future[self.variable]
+#         quantile = hist.quantile(self.q, ('time','member'))
+#         occurance_hist = hist > quantile
+#         occurance_hist = occurance_hist.where(np.isfinite(hist), np.NaN)
+#         occurance_future = future > quantile
+#         occurance_future = occurance_future.where(np.isfinite(future), np.NaN)
+
+#         return occurance_hist, occurance_future
+
+
 
 
     def extreme_internal_variability(self):
