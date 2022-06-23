@@ -275,8 +275,7 @@ class LargeEnsemble():
         return ds
 
 class MultiModelLargeEnsemble():
-    def __init__(self, models, variable, granularity, lat, lon, bucket, path, return_period, hist_slice, coarsen,
-                 conseq_days, rolling_average,load=False):
+    def __init__(self, models, variable, granularity, lat, lon, bucket, path, load=False):
         """Multi Model Large Ensemble class used to get CMIP6 and CESM data, and merge.
         
         Parameters
@@ -306,16 +305,11 @@ class MultiModelLargeEnsemble():
         self.lon = lon
         self.bucket = bucket
         self.path = path 
-        self.return_period = return_period
-        self.hist_slice = hist_slice
-        self.coarsen = coarsen
-        self.conseq_days = conseq_days 
-        self.rolling_average = rolling_average
         self.load = load 
         self.le_dict = self.load_large_ensembles()
         self.hist, self.future = self.merge_datasets()
-#         if self.granularity == 'Amon':
-#             self.internal_variability = self.compute_internal_variability()
+        if self.granularity == 'Amon':
+            self.internal_variability = self.compute_internal_variability()
 #         elif self.granularity == 'day':
 #             self.occurance_hist, self.occurance_future = self.quantile_occurance()
 #             self.extreme_internal = self.extreme_internal_variability()
@@ -484,7 +478,7 @@ class MultiModelLargeEnsemble():
         return dataset
 
 
-    def quantile_occurance(self, return_period, conseq_days=1, coarsen=1, 
+    def quantile_occurance(self, postprocess, return_period, conseq_days=1, coarsen=1, 
                            hist_slice=slice(None, None)):
 
         hist = self.hist[self.variable].sel(time=hist_slice)
@@ -503,7 +497,10 @@ class MultiModelLargeEnsemble():
         q = 1 - expected_events / len(hist.time)
 
         # get quantile 
-        quantile = hist.quantile(q, ('time','member'))
+        if postprocess == True:
+            quantile = hist.quantile(q, ('time','member'))
+        elif postprocess == False:
+            quantile = hist.quantile(q, ('time','member','model'))
         occurance_hist = hist > quantile
         occurance_hist = occurance_hist.where(np.isfinite(hist), np.NaN)
         occurance_future = future > quantile
@@ -512,23 +509,7 @@ class MultiModelLargeEnsemble():
         return occurance_hist, occurance_future
 
 
-
-#     def quantile_occurance(self):
-    
-#         hist = self.hist[self.variable].sel(time=slice('1995','2014')) # do we want to use the full 1920-2014 period? 
-#         future = self.future[self.variable]
-#         quantile = hist.quantile(self.q, ('time','member'))
-#         occurance_hist = hist > quantile
-#         occurance_hist = occurance_hist.where(np.isfinite(hist), np.NaN)
-#         occurance_future = future > quantile
-#         occurance_future = occurance_future.where(np.isfinite(future), np.NaN)
-
-#         return occurance_hist, occurance_future
-
-
-
-
-    def extreme_internal_variability(self, return_period, conseq_days=1, coarsen=1, 
+    def extreme_internal_variability(self, postprocess,return_period, conseq_days=1, coarsen=1, 
                            hist_slice=slice(None, None), rolling_average=10):
     
         dataset = xr.Dataset()
@@ -537,7 +518,8 @@ class MultiModelLargeEnsemble():
             return_period=return_period,
             conseq_days=conseq_days,
             coarsen=coarsen,
-            hist_slice=hist_slice
+            hist_slice=hist_slice,
+            postprocess = postprocess
         )
         
         occurance = occurance_future.resample(time='AS').mean().rolling(
