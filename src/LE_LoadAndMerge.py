@@ -53,8 +53,8 @@ class LargeEnsemble():
         self.hist_path = f'gcs://{self.bucket}/{self.path}/{self.ds_name_hist}.zarr'
         self.future_path = f'gcs://{self.bucket}/{self.path}/{self.ds_name_future}.zarr'
         
-        # print(self.hist_path)
-        # print(self.future_path)
+        print(self.hist_path)
+        print(self.future_path)
         
         # load the saved data or retrieve the data 
         if load:
@@ -84,6 +84,19 @@ class LargeEnsemble():
                 variable=['TREFHT'],
                 frequency=frequency
                 )
+        elif self.variable == 'tasmax':
+            cat = raw_cat.search(
+                experiment=['RCP85','20C'],
+                variable=['TREFHTMX'],
+                frequency=frequency
+                )
+        elif self.variable == 'tasmin':
+            cat = raw_cat.search(
+                experiment=['RCP85','20C'],
+                variable=['TREFHTMN'],
+                frequency=frequency
+                )
+            
         elif self.variable == 'pr' and self.granularity=='Amon':
             cat = raw_cat.search(
                 experiment=['RCP85','20C'],
