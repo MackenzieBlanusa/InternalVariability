@@ -10,6 +10,69 @@ import pprint
 import cftime 
 import psutil
 
+
+def convert_calendar(ds, granularity: str):
+    """Convert to common calendar.
+
+    For "monthly", simply converts to numpy datetime objects and sets dates to first
+    of the month.
+
+    For "daily", converts all calendars to standard calendar. Leap years are ignored.
+    Error from this is assumed to be small.
+
+    Parameters
+    ----------
+    ds: xr.Dataset
+        CMIP model dataset in either daily or monthly resolution
+    granularity: str
+        Either "daily" or "monthly"
+
+    Returns
+    -------
+    ds: xr.Dataset
+        Same CMIP dataset with converted calendar
+
+    """
+
+    if granularity == 'daily':
+        if isinstance(ds.time.values[0], cftime.Datetime360Day):
+            # Whoever came up with this should smolder in hell
+            # The code below maps the 360 days to a 365 day calendar
+            new_times = []
+            for year in np.unique(ds.time.dt.year):
+                times360 = ds.sel(time=str(year)).time
+                delta = np.timedelta64(int(365 / 360 * 24 * 60), 'm')
+                new_time = np.arange(f'{year}-01-01', f'{year}-12-31',
+                                     delta, dtype='datetime64').astype('datetime64[D]')
+                new_time = new_time[:len(times360)]
+                new_times.append(new_time)
+            new_times = np.concatenate(new_times)
+            ds = ds.assign_coords({'time': new_times})
+#         if type(ds.time.values[0]) in [
+#             cftime.DatetimeNoLeap,
+#             cftime.DatetimeProlepticGregorian,
+#             cftime.DatetimeGregorian,
+#             cftime.DatetimeJulian
+#         ]:
+        else:
+            ds = ds.assign_coords({'time': ds.time.values.astype('datetime64[D]')})
+
+    elif granularity == 'monthly':
+        if not type(ds.time.values[0]) is np.datetime64:
+            new_time = [
+                np.datetime64(c.isoformat()[:10]).astype('datetime64[M]') for c in ds.time.values
+            ]
+        else:
+            new_time = ds.time.values.astype('datetime64[M]')
+        ds = ds.assign_coords({'time': new_time})
+
+    else:
+        raise NotImplementedError(f'Granularity {granularity} not implemented.')
+
+    return ds
+
+
+
 class LargeEnsemble():
     def __init__(self, model_name, variable, granularity, lat, lon, bucket, path, 
                  load=False):
@@ -116,8 +179,8 @@ class LargeEnsemble():
         keys = sorted(dset.keys())
         hist = self.process_dataset(dataset=dset[keys[0]])
         future = self.process_dataset(dataset=dset[keys[1]])
-        future = self.convert_calendar(future,granularity=frequency)
-        hist = self.convert_calendar(hist,granularity=frequency)
+        future = convert_calendar(future,granularity=frequency)
+        hist = convert_calendar(hist,granularity=frequency)
         # for precip: calculate pr 
         if self.variable == 'pr' and self.granularity == 'Amon':
             hist = self.cesm_total_precip(ds=hist)
@@ -187,11 +250,11 @@ class LargeEnsemble():
         future = future.sel(time=slice('2015','2100'))
         hist = hist.sel(time=slice('1920','2014'))
         if self.granularity == 'Amon':
-            future = self.convert_calendar(future,granularity='monthly')
-            hist = self.convert_calendar(hist,granularity='monthly')
+            future = convert_calendar(future,granularity='monthly')
+            hist = convert_calendar(hist,granularity='monthly')
         elif self.granularity == 'day':
-            future = self.convert_calendar(future,granularity='daily')
-            hist = self.convert_calendar(hist,granularity='daily')
+            future = convert_calendar(future,granularity='daily')
+            hist = convert_calendar(hist,granularity='daily')
             
         
         return hist, future
@@ -234,64 +297,7 @@ class LargeEnsemble():
         )
         return hist_path, future_path
     
-    def convert_calendar(self,ds, granularity: str):
-        """Convert to common calendar.
-
-        For "monthly", simply converts to numpy datetime objects and sets dates to first
-        of the month.
-
-        For "daily", converts all calendars to standard calendar. Leap years are ignored.
-        Error from this is assumed to be small.
-
-        Parameters
-        ----------
-        ds: xr.Dataset
-            CMIP model dataset in either daily or monthly resolution
-        granularity: str
-            Either "daily" or "monthly"
-
-        Returns
-        -------
-        ds: xr.Dataset
-            Same CMIP dataset with converted calendar
-
-        """
-
-        if granularity == 'daily':
-            if type(ds.time.values[0]) in [
-                cftime.DatetimeNoLeap,
-                cftime.DatetimeProlepticGregorian,
-                cftime.DatetimeGregorian,
-                cftime.DatetimeJulian
-            ]:
-                ds = ds.assign_coords({'time': ds.time.values.astype('datetime64[D]')})
-            elif isinstance(ds.time.values[0], cftime.Datetime360Day):
-                # Whoever came up with this should smolder in hell
-                # The code below maps the 360 days to a 365 day calendar
-                new_times = []
-                for year in np.unique(ds.time.dt.year):
-                    times360 = ds.sel(time=str(year)).time
-                    delta = np.timedelta64(int(365 / 360 * 24 * 60), 'm')
-                    new_time = np.arange(f'{year}-01-01', f'{year}-12-31',
-                                         delta, dtype='datetime64').astype('datetime64[D]')
-                    new_time = new_time[:len(times360)]
-                    new_times.append(new_time)
-                new_times = np.concatenate(new_times)
-                ds = ds.assign_coords({'time': new_times})
-
-        elif granularity == 'monthly':
-            if not type(ds.time.values[0]) is np.datetime64:
-                new_time = [
-                    np.datetime64(c.isoformat()[:10]).astype('datetime64[M]') for c in ds.time.values
-                ]
-            else:
-                new_time = ds.time.values.astype('datetime64[M]')
-            ds = ds.assign_coords({'time': new_time})
-
-        else:
-            raise NotImplementedError(f'Granularity {granularity} not implemented.')
-
-        return ds
+    
 
 class MultiModelLargeEnsemble():
     def __init__(self, models, variable, granularity, lat, lon, bucket, path, load=False):

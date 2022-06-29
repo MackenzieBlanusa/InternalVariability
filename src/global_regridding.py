@@ -9,6 +9,7 @@ import psutil
 import xesmf as xe
 from tqdm import tqdm
 from fire import Fire
+from LE_LoadAndMerge import convert_calendar
 
 import dask
 
@@ -28,6 +29,81 @@ def regrid_ds(ds_in, dx):
     ds_out = regridder(ds_in, keep_attrs=True)
     return ds_out
 
+def load_lens_cat(experiment_id, variable_id, table_id, source_id):
+    url = "https://raw.githubusercontent.com/NCAR/cesm-lens-aws/main/intake-catalogs/aws-cesm1-le.json"
+    raw_cat = intake.open_esm_datastore(url)
+
+    if table_id == "Amon":
+        frequency = 'monthly'
+    elif table_id == "day":
+        frequency = 'daily'
+    if variable_id == 'tas':
+        cat = raw_cat.search(
+            experiment=['RCP85','20C'],
+            variable=['TREFHT'],
+            frequency=frequency
+        )
+    elif variable_id == 'tasmax':
+        cat = raw_cat.search(
+            experiment=['RCP85','20C'],
+            variable=['TREFHTMX'],
+            frequency=frequency
+            )
+    elif variable_id == 'tasmin':
+        cat = raw_cat.search(
+            experiment=['RCP85','20C'],
+            variable=['TREFHTMN'],
+            frequency=frequency
+            )
+            
+    elif variable_id == 'pr' and table_id=='Amon':
+        cat = raw_cat.search(
+            experiment=['RCP85','20C'],
+            variable=['PRECL','PRECC'],
+            frequency=frequency
+            )
+        raise NotImplementedError
+    elif variable_id == 'pr' and table_id == 'day':
+        cat = raw_cat.search(
+            experiment=['RCP85','20C'],
+            variable=['PRECT'],
+            frequency=frequency
+            )
+    return cat
+
+def rename_cesm(ds, variable_id, table_id):
+    if variable_id == 'pr' and table_id == 'day':
+        ds = ds.rename_vars({'PRECT':'pr'})
+        ds['pr'] = ds.pr * 997
+    #rename temp variable
+    elif variable_id == 'tas':
+        ds = ds.rename_vars({'TREFHT':'tas'})
+    elif variable_id == 'tasmin':
+        ds = ds.rename_vars({'TREFHTMN':'tasmin'})
+    elif variable_id == 'tasmax':
+        ds = ds.rename_vars({'TREFHTMX':'tasmax'})
+    return ds
+
+def concat_cesm(dsets, experiment_id):
+#     import pdb; pdb.set_trace()
+    keys = sorted(dsets.keys())
+    hist = dsets[keys[0]]
+    future = dsets[keys[1]]
+    ds = xr.concat([hist, future], 'time')
+    return ds
+
+
+def load_cmip_cat(experiment_id, variable_id, table_id, source_id):
+    url = 'https://storage.googleapis.com/cmip6/pangeo-cmip6.json'
+    raw_cat = intake.open_esm_datastore(url)
+    cat = raw_cat.search(
+        experiment_id=experiment_id,
+        variable_id= variable_id,
+        table_id = table_id,
+        source_id = source_id
+    )
+    return cat
+
 def regrid_global(dx, bucket, path, source_id, experiment_id, variable_id, table_id='day', 
                   out_chunks={'time': 100_000, 'lon': 5, 'lat': 5}, n_workers=4):
     cluster = dask.distributed.LocalCluster(
@@ -38,17 +114,28 @@ def regrid_global(dx, bucket, path, source_id, experiment_id, variable_id, table
     client = dask.distributed.Client(cluster)
     
     # Load catalog
-    url = 'https://storage.googleapis.com/cmip6/pangeo-cmip6.json'
-    raw_cat = intake.open_esm_datastore(url)
-    cat = raw_cat.search(
-        experiment_id=experiment_id,
-        variable_id= variable_id,
-        table_id = table_id,
-        source_id = source_id
-    )
+    if source_id == 'cesm_lens':
+        cat = load_lens_cat(
+            experiment_id=experiment_id,
+            variable_id= variable_id,
+            table_id = table_id,
+            source_id = source_id
+        )
+    else:
+        cat = load_cmip_cat(
+            experiment_id=experiment_id,
+            variable_id= variable_id,
+            table_id = table_id,
+            source_id = source_id
+        )
     
     # Open all datasets
-    dsets = cat.to_dataset_dict(zarr_kwargs={'consolidated':True}, storage_options={"anon": True}, aggregate=False)
+    dsets = cat.to_dataset_dict(zarr_kwargs={'consolidated':True}, storage_options={"anon": True}, aggregate=True)
+    if source_id == 'cesm_lens':
+        dsets = concat_cesm(dsets, experiment_id)
+        dsets = rename_cesm(dsets, variable_id, table_id)
+    else:
+        dsets = list(dsets.values())[0]
     
     save_path = f'gcs://{bucket}/{path}/{source_id}/{experiment_id}/{table_id}/{variable_id}.zarr'
     print('Saving:', save_path)
@@ -56,12 +143,17 @@ def regrid_global(dx, bucket, path, source_id, experiment_id, variable_id, table
     
     # Regrid and save every dataset
     first = True
-    for k, ds in tqdm(dsets.items()):
+    for m in tqdm(dsets.member_id):
+        ds = dsets.sel(member_id=m)
+#         import pdb; pdb.set_trace()
+        ds = convert_calendar(ds, 'daily' if table_id=='day' else 'monthly')
         if experiment_id == 'historical':
-            ds = ds.sel(time=slice('1920', None))
+            ds = ds.sel(time=slice('1920', '2014'))
         else:
-            ds = ds.sel(time=slice(None, '2100'))
-        ds = ds.assign_coords({'member_id': ds.variant_label}).expand_dims('member_id')
+            ds = ds.sel(time=slice('2015', '2100'))
+#         if ds.lon > 180 or ds.lon < -180:
+#             ds = ds.assign_coords(lon=((ds.lon + 180) % 360 - 180))
+#         ds = ds.assign_coords({'member_id': ds.variant_label}).expand_dims('member_id')
         ds_out = regrid_ds(ds, dx)
         ds_out = ds_out.chunk(out_chunks)
         del ds_out.attrs['intake_esm_varname']   # Have to do that because can't save None...
