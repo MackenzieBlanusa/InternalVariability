@@ -11,8 +11,8 @@ import cftime
 import psutil
 
 class LargeEnsemble():
-    def __init__(self, model_name, variable, granularity, lat, lon, bucket, path, 
-                 load=False):
+    def __init__(self, model_name, scenario, variable, granularity, lat, lon, bucket, path, 
+                 load=False, single_member=False):
         """Large Ensemble class used to get CMIP6 and CESM data, and merge.
         
         Parameters
@@ -36,6 +36,7 @@ class LargeEnsemble():
             
         """
         self.model_name = model_name
+        self.scenario = scenario
         self.variable = variable
         self.granularity = granularity
         self.lat = lat
@@ -43,6 +44,7 @@ class LargeEnsemble():
         self.bucket = bucket
         self.path = path 
         self.load = load 
+        self.single_member = single_member
         
         lat_str = str(lat)
         lon_str = str(self.lon)
@@ -50,23 +52,32 @@ class LargeEnsemble():
         # define using self
         self.ds_name_hist = f'{self.model_name}_{self.granularity}_hist_{self.variable}_{lat_str}_{lon_str}'
         self.ds_name_future = f'{self.model_name}_{self.granularity}_future_{self.variable}_{lat_str}_{lon_str}'
+        self.ds_name_scenario = f'{self.model_name}_{self.granularity}_{self.scenario}_{self.variable}_{lat_str}_{lon_str}'
         self.hist_path = f'gcs://{self.bucket}/{self.path}/{self.ds_name_hist}.zarr'
         self.future_path = f'gcs://{self.bucket}/{self.path}/{self.ds_name_future}.zarr'
+        self.scenario_path = f'gcs://{self.bucket}/{self.path}/{self.ds_name_scenario}.zarr'
         
         print(self.hist_path)
         print(self.future_path)
+        print(self.scenario_path)
         
         # load the saved data or retrieve the data 
-        if load:
+        if load == True and self.single_member == False:
             self.hist = xr.open_zarr(self.hist_path, consolidated=True)
             self.future = xr.open_zarr(self.future_path, consolidated=True)
         else:
-            if model_name == 'cesm_lens':
+            if model_name == 'cesm_lens' and self.single_member == False:
                 self.hist, self.future = self.load_cesm_lens() # xr.DataArray [time, member]
-            else:
+            elif self.single_member == False:
                 self.hist, self.future = self.load_cmip6()
-
-            self.hist_path, self.future_path = self.save()
+                self.hist_path, self.future_path = self.save()
+        
+        if load == True and self.single_member == True:
+            self.hist = xr.open_zarr(self.hist_path, consolidated=True)
+            self.scenario = xr.open_zarr(self.scenario_path, consolidated=True)
+        elif self.single_member == True:
+            self.scenario, self.hist = self.load_cmip6()
+            self.scenario_path, self.hist_path = self.save()
 
     def load_cesm_lens(self):
         """TO_DO : ADD DOC STRING"""
@@ -171,30 +182,57 @@ class LargeEnsemble():
         url = 'https://storage.googleapis.com/cmip6/pangeo-cmip6.json'
         raw_cat = intake.open_esm_datastore(url)
         # Define specific search
-        cat = raw_cat.search(
-            experiment_id=['historical','ssp585'],
-            variable_id=self.variable,
-            table_id = self.granularity,
-            source_id = self.model_name
+        if self.single_member == False:
+            cat = raw_cat.search(
+                experiment_id=['historical','ssp585'],
+                variable_id=self.variable,
+                table_id = self.granularity,
+                source_id = self.model_name
+                )
+        elif self.single_member == True:
+            cat = raw_cat.search(
+                experiment_id = ['historical',self.scenario],
+                variable_id = self.variable,
+                member_id = 'r1i1p1f1',
+                grid_label = ['gn','gr','gr1'],
+                table_id = self.granularity,
+                source_id = self.model_name
             )
+                
         # load dictionary of searched datasets, comma added to ignore warnings 
         dset = cat.to_dataset_dict(zarr_kwargs={'consolidated':True}, storage_options={"anon": True});
         # define the datasets by sorted keys
         keys = sorted(dset.keys())
-        hist = self.process_dataset(dataset=dset[keys[0]])
-        future = self.process_dataset(dataset=dset[keys[1]])
-        #slice to 2100, some models that go out to 2300 raise error when converting calendar 
-        future = future.sel(time=slice('2015','2100'))
-        hist = hist.sel(time=slice('1920','2014'))
-        if self.granularity == 'Amon':
-            future = self.convert_calendar(future,granularity='monthly')
-            hist = self.convert_calendar(hist,granularity='monthly')
-        elif self.granularity == 'day':
-            future = self.convert_calendar(future,granularity='daily')
-            hist = self.convert_calendar(hist,granularity='daily')
+        if self.single_member == False:
+            hist = self.process_dataset(dataset=dset[keys[0]])
+            future = self.process_dataset(dataset=dset[keys[1]])
+            #slice to 2100, some models that go out to 2300 raise error when converting calendar 
+            future = future.sel(time=slice('2015','2100'))
+            hist = hist.sel(time=slice('1920','2014'))
+            if self.granularity == 'Amon':
+                future = self.convert_calendar(future,granularity='monthly')
+                hist = self.convert_calendar(hist,granularity='monthly')
+            elif self.granularity == 'day':
+                future = self.convert_calendar(future,granularity='daily')
+                hist = self.convert_calendar(hist,granularity='daily')
+                
+            return hist, future
             
-        
-        return hist, future
+        elif self.single_member == True:
+            hist = self.process_dataset(dataset=dset[keys[0]])
+            scenario = self.process_dataset(dataset=dset[keys[1]])
+            #slice to 2100, some models that go out to 2300 raise error when converting calendar 
+            scenario = scenario.sel(time=slice('2015','2100'))
+            hist = hist.sel(time=slice('1920','2014'))
+            if self.granularity == 'Amon':
+                scenario = self.convert_calendar(scenario,granularity='monthly')
+                hist = self.convert_calendar(hist,granularity='monthly')
+            elif self.granularity == 'day':
+                scenario = self.convert_calendar(scenario,granularity='daily')
+                hist = self.convert_calendar(hist,granularity='daily')
+            
+            return scenario, hist       
+
     
     def process_dataset(self,dataset):
         """ADD DOC STRING
@@ -220,19 +258,33 @@ class LargeEnsemble():
 
     def save(self):
         """TO_DO : ADD DOC STRING"""
-
-        hist_path = self.hist.to_zarr(
-            self.hist_path,
-            consolidated=True,
-            mode='w'
-        )
         
-        future_path = self.future.to_zarr(
-            self.future_path,
-            consolidated=True,
-            mode='w'
-        )
-        return hist_path, future_path
+        if self.single_member == False:
+            hist_path = self.hist.to_zarr(
+                self.hist_path,
+                consolidated=True,
+                mode='w'
+            )
+
+            future_path = self.future.to_zarr(
+                self.future_path,
+                consolidated=True,
+                mode='w'
+            )
+            return hist_path, future_path
+        elif self.single_member == True:
+            scenario_path = self.scenario.to_zarr(
+                self.scenario_path,
+                consolidated=True,
+                mode='w'
+            )
+        
+            hist_path = self.hist.to_zarr(
+                self.hist_path,
+                consolidated=True,
+                mode='w'
+            )
+            return scenario_path, hist_path
     
     def convert_calendar(self,ds, granularity: str):
         """Convert to common calendar.
@@ -294,7 +346,7 @@ class LargeEnsemble():
         return ds
 
 class MultiModelLargeEnsemble():
-    def __init__(self, models, variable, granularity, lat, lon, bucket, path, load=False):
+    def __init__(self, models, scenario, variable, granularity, lat, lon, bucket, path, load=False, single_member=False):
         """Multi Model Large Ensemble class used to get CMIP6 and CESM data, and merge.
         
         Parameters
@@ -318,6 +370,7 @@ class MultiModelLargeEnsemble():
             
         """
         self.models = models  # e.g. ['cesm_lens', 'mpi-esm']
+        self.scenario = scenario
         self.variable = variable
         self.granularity = granularity
         self.lat = lat
@@ -325,41 +378,54 @@ class MultiModelLargeEnsemble():
         self.bucket = bucket
         self.path = path 
         self.load = load 
+        self.single_member = single_member
         self.le_dict = self.load_large_ensembles()
-        self.hist, self.future = self.merge_datasets()
-        if self.granularity == 'Amon':
-            self.internal_variability = self.compute_internal_variability()
-#         elif self.granularity == 'day':
-#             self.occurance_hist, self.occurance_future = self.quantile_occurance()
-#             self.extreme_internal = self.extreme_internal_variability()
+        if self.single_member == False:
+            self.hist, self.future = self.merge_datasets()
+            if self.granularity == 'Amon':
+                self.internal_variability = self.compute_internal_variability()
+        if self.single_member == True:
+            self.scenario = self.merge_datasets()
 
     def load_large_ensembles(self):
         """TO_DO : ADD DOC STRING"""
         le_dict = {}
         for model in self.models:
-            le = LargeEnsemble(model_name=model, variable=self.variable, granularity=self.granularity,
-                               lat=self.lat,lon=self.lon,bucket=self.bucket,path=self.path,load=self.load)
+            le = LargeEnsemble(model_name=model, scenario = self.scenario,variable=self.variable, granularity=self.granularity,
+                               lat=self.lat,lon=self.lon,bucket=self.bucket,path=self.path,load=self.load,
+                               single_member=self.single_member)
             le_dict[model] = le
         return le_dict
 
     
     def merge_datasets(self):  
         """TO_DO : ADD DOC STRING"""
-        hist_models = []
-        future_models = []
-        for model in self.models:
-            hist = self.le_dict[model].hist
-            hist = self.prepare_merge(model=model,data=hist)
-            hist_models.append(hist)
+        if self.single_member == False:
+            hist_models = []
+            future_models = []
+            for model in self.models:
+                hist = self.le_dict[model].hist
+                hist = self.prepare_merge(model=model,data=hist)
+                hist_models.append(hist)
 
-            future = self.le_dict[model].future
-            future = self.prepare_merge(model=model,data=future)
-            future_models.append(future)
-        future = xr.concat(future_models,dim='model')
-        hist = xr.concat(hist_models,dim='model')
-        hist = hist.load()
-        future = future.load()
-        return hist, future
+                future = self.le_dict[model].future
+                future = self.prepare_merge(model=model,data=future)
+                future_models.append(future)
+            future = xr.concat(future_models,dim='model')
+            hist = xr.concat(hist_models,dim='model')
+            hist = hist.load()
+            future = future.load()
+            return hist, future
+        elif self.single_member == True:
+            scenario_models = []
+            for model in self.models:
+                scenario = self.le_dict[model].scenario
+                scenario = self.prepare_merge(model=model,data=scenario)
+                scenario_models.append(scenario)
+            scenario = xr.concat(scenario_models,dim='model')
+            scenario = scenario.load()
+
+            return scenario
     
     def prepare_merge(self,model,data):
         """Prepare CMIP and CESM for merging
