@@ -131,6 +131,12 @@ class LargeEnsemble():
         elif self.variable == 'tas':
             future = future.rename_vars({'TREFHT':'tas'})
             hist = hist.rename_vars({'TREFHT':'tas'})
+        elif self.variable == 'tasmin':
+            future = future.rename_vars({'TREFHTMN':'tasmin'})
+            hist = hist.rename_vars({'TREFHTMN':'tasmin'})
+        elif self.variable == 'tasmax':
+            future = future.rename_vars({'TREFHTMX':'tasmax'})
+            hist = hist.rename_vars({'TREFHTMX':'tasmax'})
         # concat and split so time is in cmip convention
         CESM = xr.concat(
             [hist, future], dim='time'
@@ -366,7 +372,7 @@ class MultiModelLargeEnsemble():
         dataset[self.variable] = dataset[self.variable].swap_dims({'member_id':'member'})
         dataset['member_id'] = dataset.member_id.swap_dims({'member_id':'member'})
         dataset['time'] = dataset.time.values.astype('datetime64[D]')
-        if self.variable == 'tas':
+        if self.variable == 'tas' or 'tasmax' or 'tasmin':
             dataset[self.variable] = dataset[self.variable] - 273.15
 
         return dataset
@@ -407,8 +413,9 @@ class MultiModelLargeEnsemble():
     
     def compute_internalLE(self,data):
         internal = data.var('member')
-        internal = internal.mean(dim='model')
-        return internal
+        internal_mean = internal.mean(dim='model')
+        internal_var = internal.var(dim='model')
+        return internal_mean, internal_var
     
     def compute_total_uncertainty(self,internal,model):
         total = internal + model
@@ -430,8 +437,9 @@ class MultiModelLargeEnsemble():
     
     def compute_internalFIT(self,data,fit):
         residual = data - fit
-        internal = residual.var('time').mean()
-        return internal
+        internal_mean = residual.var('time').mean()
+        internal_var = residual.var('time').var()
+        return internal_mean, internal_var
     
     def compute_modelFIT(self,fit):
         model = fit.var('model')
@@ -463,7 +471,7 @@ class MultiModelLargeEnsemble():
         #decadal rolling average 
         data = data.rolling(time=10, center=True).mean()   #dropna not working 
         #implicit bias correction
-        if self.variable == 'tas':
+        if self.variable == 'tas' or 'tasmax' or 'tasmin':
             data = (data-dataset[self.variable+'_ref'])
         elif self.variable == 'pr':
             data = (((data-dataset[self.variable+'_ref'])/dataset[self.variable+'_ref'])*100)      #percent change (not sure if this is right, getting weird results)
@@ -471,19 +479,22 @@ class MultiModelLargeEnsemble():
         
         # Internal var via LE method 
         dataset['model_le'] = self.compute_modelLE(data=dataset[self.variable])
-        dataset['internal_le'] = self.compute_internalLE(data=dataset[self.variable])
-        dataset['total_le'] = self.compute_total_uncertainty(internal=dataset['internal_le'],model=dataset['model_le'])
+        dataset['internal_mean_le'] = self.compute_internalLE(data=dataset[self.variable])[0]
+        dataset['internal_var_le'] = self.compute_internalLE(data=dataset[self.variable])[1]
+        dataset['total_le'] = self.compute_total_uncertainty(internal=dataset['internal_mean_le'],model=dataset['model_le'])
         dataset['total_direct_le'] = self.compute_total_direct(data=dataset[self.variable])
-        dataset['internal_le_frac'],dataset['model_le_frac']=self.compute_percent_contribution(internal=dataset['internal_le'],
+        dataset['internal_le_frac'],dataset['model_le_frac']=self.compute_percent_contribution(internal=dataset['internal_mean_le'],
                                                                                                model=dataset['model_le'],
                                                                                                total = dataset['total_le'])
         # Internal var via FIT method
         dataset['fit'] = self.get_fit(data=dataset[self.variable])
-        dataset['internal_fit'] = self.compute_internalFIT(data=dataset[self.variable].isel(member=0),
-                                                           fit = dataset['fit'])
+        dataset['internal_mean_fit'] = self.compute_internalFIT(data=dataset[self.variable].isel(member=0),
+                                                           fit = dataset['fit'])[0]
+        dataset['internal_var_fit'] = self.compute_internalFIT(data=dataset[self.variable].isel(member=0),
+                                                           fit = dataset['fit'])[1]
         dataset['model_fit'] = self.compute_modelFIT(fit=dataset['fit'])
-        dataset['total_fit'] = self.compute_total_uncertainty(internal=dataset['internal_fit'],model=dataset['model_fit'])
-        dataset['internal_fit_frac'],dataset['model_fit_frac']= self.compute_percent_contribution(internal=dataset['internal_fit'],
+        dataset['total_fit'] = self.compute_total_uncertainty(internal=dataset['internal_mean_fit'],model=dataset['model_fit'])
+        dataset['internal_fit_frac'],dataset['model_fit_frac']= self.compute_percent_contribution(internal=dataset['internal_mean_fit'],
                                            model=dataset['model_fit'],
                                            total = dataset['total_fit'])
         dataset['total_direct_fit'] = self.compute_totaldirect_fit(data=dataset[self.variable].isel(member=0))
@@ -542,24 +553,28 @@ class MultiModelLargeEnsemble():
         # Internal var via LE method 
         dataset['model_le'] = self.compute_modelLE(
             data=dataset[self.variable+'_occurance'])
-        dataset['internal_le'] = self.compute_internalLE(
-            data=dataset[self.variable+'_occurance'])
+        dataset['internal_mean_le'] = self.compute_internalLE(
+            data=dataset[self.variable+'_occurance'])[0]
+        dataset['internal_var_le'] = self.compute_internalLE(
+            data=dataset[self.variable+'_occurance'])[1]
         dataset['total_le'] = self.compute_total_uncertainty(
-            internal=dataset['internal_le'], model=dataset['model_le'])
+            internal=dataset['internal_mean_le'], model=dataset['model_le'])
         dataset['total_direct_le'] = self.compute_total_direct(
             data=dataset[self.variable+'_occurance'])
         dataset['internal_le_frac'], dataset['model_le_frac']= self.compute_percent_contribution(
-            internal=dataset['internal_le'], model=dataset['model_le'], total=dataset['total_le'])
+            internal=dataset['internal_mean_le'], model=dataset['model_le'], total=dataset['total_le'])
         
         # Internal var via FIT method
         dataset['fit'] = self.get_fit(data=dataset[self.variable+'_occurance'].T)
-        dataset['internal_fit'] = self.compute_internalFIT(
-            data=dataset[self.variable+'_occurance'].isel(member=0), fit=dataset['fit'])
+        dataset['internal_mean_fit'] = self.compute_internalFIT(
+            data=dataset[self.variable+'_occurance'].isel(member=0), fit=dataset['fit'])[0]
+        dataset['internal_var_fit'] = self.compute_internalFIT(
+            data=dataset[self.variable+'_occurance'].isel(member=0), fit=dataset['fit'])[1]
         dataset['model_fit'] = self.compute_modelFIT(fit=dataset['fit'])
         dataset['total_fit'] = self.compute_total_uncertainty(
-            internal=dataset['internal_fit'], model=dataset['model_fit'])
+            internal=dataset['internal_mean_fit'], model=dataset['model_fit'])
         dataset['internal_fit_frac'], dataset['model_fit_frac']= self.compute_percent_contribution(
-            internal=dataset['internal_fit'], model=dataset['model_fit'], total=dataset['total_fit'])
+            internal=dataset['internal_mean_fit'], model=dataset['model_fit'], total=dataset['total_fit'])
         dataset['total_direct_fit'] = self.compute_totaldirect_fit(
             data=dataset[self.variable+'_occurance'].isel(member=0))
 
