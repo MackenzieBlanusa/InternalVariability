@@ -9,26 +9,26 @@ regions = {
     'australia': {'lat': -25.2, 'lon': 133.7},
     'tropics': {'lat': 3.9, 'lon': -53.1}
 }
+variables = ['t2m', 'tp', 't2m_max']
 
+variable = 'tasmax'
 
-for region in ['iceland', 'europe', 'australia', 'tropics']:
+for region in ['USwest', 'europe', 'australia', 'tropics', 'USeast', 'iceland']:
 
     lat = regions[region]['lat']
     lon = regions[region]['lon']
 
-
-    variables = ['t2m', 'tp', 't2m_max']
-
     cp = ClimateProjection(
-        lat,lon,variables,'ssp585',projection_name=region,
+        lat, lon, variables, 'ssp585', projection_name=region,
         gcs_bucket='climateai_data_repository', gcs_path='tmp/internal_variability/era_files'
     )
 
-    cp.reanalysis_daily = ERA(cp.lat, cp.lon, cp.variables['reanalysis']['daily'], granularity='daily'
-                ).load(ram=True, interp_dx=None)
-    cp.reanalysis_monthly = ERA(cp.lat, cp.lon, cp.variables['reanalysis']['monthly'], granularity='monthly'
-                ).load(ram=True, interp_dx=None)
-
+    cp.reanalysis_daily = ERA(
+        cp.lat, cp.lon, cp.variables['reanalysis']['daily'], granularity='daily'
+    ).load(ram=True, interp_dx=None)
+    cp.reanalysis_monthly = ERA(
+        cp.lat, cp.lon, cp.variables['reanalysis']['monthly'], granularity='monthly'
+    ).load(ram=True, interp_dx=None)
 
     cp._save_ds(cp.reanalysis_daily, 'reanalysis_daily', chunks=None)
     cp._save_ds(cp.reanalysis_monthly, 'reanalysis_monthly', chunks=None)
