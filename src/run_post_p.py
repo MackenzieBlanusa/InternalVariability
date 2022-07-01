@@ -42,16 +42,16 @@ for region in ['USwest', 'europe', 'australia', 'tropics', 'USeast', 'iceland']:
         reanalysis_daily[cmip2era[variable]]
     ).to_dataset(name=variable)
 
-    # large_ens_future = qdm_large_ensemble(
-    #     MMLE.future[variable],
-    #     MMLE.hist[variable],
-    #     reanalysis_daily[cmip2era[variable]]
-    # ).to_dataset(name=variable)
+    large_ens_future = qdm_large_ensemble(
+        MMLE.future[variable],
+        MMLE.hist[variable],
+        reanalysis_daily[cmip2era[variable]]
+    ).to_dataset(name=variable)
 
     cp = ClimateProjection(
         lat, lon, cmip2era[variable], 'ssp585', projection_name=region,
         gcs_bucket='climateai_data_repository', gcs_path='tmp/internal_variability/era_files'
     )
-    #cp._save_ds(large_ens_future, f'future_qdm_{variable}', chunks=None)
+    cp._save_ds(large_ens_future, f'future_qdm_{variable}', chunks=None)
     cp._save_ds(large_ens_hist, f'hist_qdm_{variable}', chunks=None)
     print(f'Done post-processing {region}!')

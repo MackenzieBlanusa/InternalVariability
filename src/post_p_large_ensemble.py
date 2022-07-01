@@ -44,6 +44,45 @@ def qdm_large_ensemble(hist, future, reanalysis):
     else:
         return implement_quantile_delta_mapping(hist, future, reanalysis)
 
+def create_rolling_window(X,time_window=10):
+        # define time deltas for days (24 h), months (28, 29, 30, and 31 days ),
+    # and year (regular and leap year)
+    recurrence = 'D'
+
+    years = X.time.dt.year.values
+    start_date = np.datetime64(X.time.values[0], recurrence)
+    end_date = np.datetime64(X.time.values[-1], recurrence)
+
+    # create data to append in the beginning to ensure static time window
+    X_1_slice = X.sel(time=slice(str(years[0] + int(time_window / 2)),
+                                    str(years[0] + time_window - 1)))
+    X1_dates = np.arange(start_date - np.timedelta64(len(X_1_slice.time), recurrence),
+                            start_date,
+                            dtype=f'datetime64[{recurrence}]')
+    X_1 = X_1_slice.assign_coords({'member':X.member.values, 'time':X1_dates})
+
+    # create data to append in the end
+    X_2_slice = X.sel(time=slice(str(years[-1] - time_window + 1),
+                                    str(years[-1] - int(time_window / 2))))
+    X2_dates = np.arange(end_date + np.timedelta64(1, recurrence),
+                            end_date + np.timedelta64(len(X_2_slice.time) + 1, recurrence),
+                            dtype=f'datetime64[{recurrence}]')
+    X_2 = X_2_slice.assign_coords(time=X2_dates, member=X.member.values)
+
+    # append data, construct rolling and select original years
+    X_final = xr.concat([X_1, X, X_2], dim='time')
+    X_rolling = X_final.rolling(time=len(X1_dates) * 2,
+                                center=True).construct('tm').sel(
+        time=slice(X.time[0].values, X.time[-1].values))
+
+    # select desired time first element of the year, every 'step' years
+    X_rolling = X_rolling.sel(
+        time=X_rolling.time.dt.day == X_rolling.time.dt.day.values[0])
+
+    X_rolling = X_rolling.sel(
+        time=X_rolling.time.dt.month == X_rolling.time.dt.month.values[0])
+
+    return X_rolling
 
 def implement_quantile_delta_mapping(
     X: xr.DataArray, hist: xr.DataArray, obs: xr.DataArray
@@ -67,28 +106,34 @@ def implement_quantile_delta_mapping(
     hist_r = hist.where(obs.time==hist.time)
 
     hist_flat = hist_r.values.flatten()
-    X_flat = X.values.flatten()
 
     if obs.name == 'tp':
         obs_r =  prepare_data(obs_r)
         hist_r = prepare_data_numpy(hist_r)
         X = prepare_data_numpy(X)
 
-    quantiles = MyECDF(X_flat)(X_flat)
+    years = []
+    X_rolling = create_rolling_window(X)
+    for i in X_rolling.time:
+        X_flat = X_rolling.sel(time=i).values.flatten()
+        X_cut = X.sel(time=str(i.dt.year.values))
+        quantiles = MyECDF(X_flat)(X_cut.values.flatten())
 
-    historical_value = np.nanquantile(hist_flat, np.nan_to_num(quantiles))
-    reanalysis_value = np.nanquantile(obs_r, np.nan_to_num(quantiles))
+        historical_value = np.nanquantile(hist_flat, np.nan_to_num(quantiles))
+        reanalysis_value = np.nanquantile(obs_r, np.nan_to_num(quantiles))
 
+        if obs.name == 'tp':
+            X_clean_post_p = (reanalysis_value * X_cut.values.flatten()) /historical_value
+        else:
+            X_clean_post_p = reanalysis_value + X_cut.values.flatten() - historical_value
+
+        X_clean_post_p = X_clean_post_p.reshape(X_cut.shape, order='C')
+
+        data = xr.DataArray(X_clean_post_p, dims=X_cut.dims, coords=X_cut.coords)
+        years.append(data)
+
+    complete_data = xr.concat(years, dim='time')
     if obs.name == 'tp':
-        X_clean_post_p = (reanalysis_value * X_flat) /historical_value
-    else:
-        X_clean_post_p = reanalysis_value + X_flat - historical_value
+        complete_data = complete_data.where(X > 0.1, 0)
 
-    X_clean_post_p = X_clean_post_p.reshape(X.shape, order='C')
-
-    data = xr.DataArray(X_clean_post_p, dims=X.dims, coords=X.coords)
-
-    if obs.name == 'tp':
-        data = data.where(X > 0.1, 0)
-
-    return data.where(~X.isnull())
+    return complete_data.where(~X.isnull())
