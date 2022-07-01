@@ -143,8 +143,8 @@ def regrid_global(dx, bucket, path, source_id, experiment_id, variable_id, table
     
     # Regrid and save every dataset
     first = True
-    for m in tqdm(dsets.member_id):
-        ds = dsets.sel(member_id=m)
+    for i in tqdm(range(len(dsets.member_id))):
+        ds = dsets.isel(member_id=[i])
 #         import pdb; pdb.set_trace()
         ds = convert_calendar(ds, 'daily' if table_id=='day' else 'monthly')
         if experiment_id == 'historical':
@@ -160,6 +160,7 @@ def regrid_global(dx, bucket, path, source_id, experiment_id, variable_id, table
         ds_out = drop_bounds_height(ds_out)
         if first:
             ds_out.to_zarr(save_path, consolidated=True, mode='w')
+            first = False
         else:
             ds_out.to_zarr(save_path, consolidated=True, mode='a', append_dim='member_id')
         
