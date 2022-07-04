@@ -174,14 +174,13 @@ def regrid_global(dx, bucket, path, source_id, experiment_id, variable_id, table
         ds = ds.assign_coords({'member_id': ds.variant_label}).expand_dims('member_id')
         if source_id == 'cmip6':
             ds = ds.assign_coords({'model': ds.source_id}).expand_dims('model')
-        print(ds)
         if source_id == 'EC-Earth3':
             ds = fix_ecearth_lat(ds)
 #         import pdb; pdb.set_trace()
         ds = convert_calendar(ds, 'daily' if table_id=='day' else 'monthly')
         ds = drop_bounds_height(ds)
         if experiment_id == 'historical':
-            if source_id == 'EC-Earth3':
+            if source_id in ['cmip6', 'EC-Earth3']:   # Fix for slightly varying time dimensions
                 ds = ds.sel(time=slice('1970', '2014'))
                 if first:
                     tmp = ds.copy().rename({variable_id: 'tmp'})
