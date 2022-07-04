@@ -104,6 +104,10 @@ def load_cmip_cat(experiment_id, variable_id, table_id, source_id):
     )
     return cat
 
+def fix_ecearth_lat(ds):
+    lat = xr.open_dataarray('EC-Earth3_lat.nc')
+    return ds.assign_coords({'lat': lat})
+
 def regrid_global(dx, bucket, path, source_id, experiment_id, variable_id, table_id='day', 
                   out_chunks={'time': 100_000, 'lon': 5, 'lat': 5}, n_workers=4):
     cluster = dask.distributed.LocalCluster(
@@ -130,12 +134,17 @@ def regrid_global(dx, bucket, path, source_id, experiment_id, variable_id, table
         )
     
     # Open all datasets
-    dsets = cat.to_dataset_dict(zarr_kwargs={'consolidated':True}, storage_options={"anon": True}, aggregate=True)
+    dsets = cat.to_dataset_dict(
+        zarr_kwargs={'consolidated':True}, storage_options={"anon": True}, 
+#         aggregate=True,
+        aggregate=False,
+        preprocess=fix_ecearth_lat if source_id == 'EC-Earth3' else None
+    )
     if source_id == 'cesm_lens':
         dsets = concat_cesm(dsets, experiment_id)
         dsets = rename_cesm(dsets, variable_id, table_id)
     else:
-        dsets = list(dsets.values())[0]
+        dsets = list(dsets.values())#[0]
     
     save_path = f'gcs://{bucket}/{path}/{source_id}/{experiment_id}/{table_id}/{variable_id}.zarr'
     print('Saving:', save_path)
@@ -143,12 +152,25 @@ def regrid_global(dx, bucket, path, source_id, experiment_id, variable_id, table
     
     # Regrid and save every dataset
     first = True
-    for i in tqdm(range(len(dsets.member_id))):
-        ds = dsets.isel(member_id=[i])
+#     for i in tqdm(range(len(dsets.member_id))):
+    for i in tqdm(range(len(dsets))):
+#         ds = dsets.isel(member_id=[i])
+        ds = dsets[i]
+        ds = ds.assign_coords({'member_id': ds.variant_label}).expand_dims('member_id')
+        if source_id == 'EC-Earth3':
+            ds = fix_ecearth_lat(ds)
 #         import pdb; pdb.set_trace()
         ds = convert_calendar(ds, 'daily' if table_id=='day' else 'monthly')
+        ds = drop_bounds_height(ds)
         if experiment_id == 'historical':
-            ds = ds.sel(time=slice('1920', '2014'))
+            if source_id == 'EC-Earth3':
+                ds = ds.sel(time=slice('1970', '2014'))
+                if first:
+                    tmp = ds.copy().rename({variable_id: 'tmp'})
+                else:
+                    ds = xr.merge([ds, tmp])[[variable_id]]
+            else:
+                ds = ds.sel(time=slice('1920', '2014'))
         else:
             ds = ds.sel(time=slice('2015', '2100'))
 #         if ds.lon > 180 or ds.lon < -180:
@@ -157,12 +179,12 @@ def regrid_global(dx, bucket, path, source_id, experiment_id, variable_id, table
         ds_out = regrid_ds(ds, dx)
         ds_out = ds_out.chunk(out_chunks)
         del ds_out.attrs['intake_esm_varname']   # Have to do that because can't save None...
-        ds_out = drop_bounds_height(ds_out)
         if first:
             ds_out.to_zarr(save_path, consolidated=True, mode='w')
             first = False
         else:
             ds_out.to_zarr(save_path, consolidated=True, mode='a', append_dim='member_id')
+        client.restart()
         
 def drop_bounds_height(ds):
         
