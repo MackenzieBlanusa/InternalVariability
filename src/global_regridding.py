@@ -93,14 +93,16 @@ def concat_cesm(dsets, experiment_id):
     return ds
 
 
-def load_cmip_cat(experiment_id, variable_id, table_id, source_id):
+def load_cmip_cat(experiment_id, variable_id, table_id, source_id, member_id=None):
     url = 'https://storage.googleapis.com/cmip6/pangeo-cmip6.json'
     raw_cat = intake.open_esm_datastore(url)
     cat = raw_cat.search(
         experiment_id=experiment_id,
         variable_id= variable_id,
         table_id = table_id,
-        source_id = source_id
+        source_id = source_id,
+        grid_label=['gn','gr','gr1'],
+        member_id=member_id
     )
     return cat
 
@@ -109,7 +111,9 @@ def fix_ecearth_lat(ds):
     return ds.assign_coords({'lat': lat})
 
 def regrid_global(dx, bucket, path, source_id, experiment_id, variable_id, table_id='day', 
-                  out_chunks={'time': 100_000, 'lon': 5, 'lat': 5}, n_workers=4):
+                  out_chunks={'time': 100_000, 'lon': 5, 'lat': 5}, n_workers=4,
+                 ):
+    
     cluster = dask.distributed.LocalCluster(
                 n_workers=n_workers,
                 threads_per_worker=1,
@@ -118,7 +122,18 @@ def regrid_global(dx, bucket, path, source_id, experiment_id, variable_id, table
     client = dask.distributed.Client(cluster)
     
     # Load catalog
-    if source_id == 'cesm_lens':
+    if source_id == 'cmip6':
+        models = ['CESM2-WACCM','CMCC-CM2-SR5','CMCC-ESM2',
+          'EC-Earth3','EC-Earth3-Veg-LR','GFDL-ESM4','IITM-ESM','INM-CM4-8','INM-CM5-0',
+          'IPSL-CM6A-LR','KACE-1-0-G','MIROC6','MPI-ESM1-2-HR','MPI-ESM1-2-LR','NorESM2-MM']
+        cat = load_cmip_cat(
+            experiment_id=experiment_id,
+            variable_id= variable_id,
+            table_id = table_id,
+            source_id = models,
+            member_id='r1i1p1f1'
+        )
+    elif source_id == 'cesm_lens':
         cat = load_lens_cat(
             experiment_id=experiment_id,
             variable_id= variable_id,
@@ -157,6 +172,9 @@ def regrid_global(dx, bucket, path, source_id, experiment_id, variable_id, table
 #         ds = dsets.isel(member_id=[i])
         ds = dsets[i]
         ds = ds.assign_coords({'member_id': ds.variant_label}).expand_dims('member_id')
+        if source_id == 'cmip6':
+            ds = ds.assign_coords({'model': ds.source_id}).expand_dims('model')
+        print(ds)
         if source_id == 'EC-Earth3':
             ds = fix_ecearth_lat(ds)
 #         import pdb; pdb.set_trace()
@@ -183,7 +201,8 @@ def regrid_global(dx, bucket, path, source_id, experiment_id, variable_id, table
             ds_out.to_zarr(save_path, consolidated=True, mode='w')
             first = False
         else:
-            ds_out.to_zarr(save_path, consolidated=True, mode='a', append_dim='member_id')
+            ds_out.to_zarr(save_path, consolidated=True, mode='a', 
+                           append_dim='model' if source_id == 'cmip6' else 'member_id')
         client.restart()
         
 def drop_bounds_height(ds):
