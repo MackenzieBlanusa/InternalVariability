@@ -14,7 +14,7 @@ import math
 
 
 from tqdm import tqdm
-def loop_over_chunks(hist, future, f, n_chunks=4, restart_every=10):
+def loop_over_chunks(hist, future, f, n_chunks=4, restart_every=10, client=None):
     n_lat, n_lon = hist.data.shape[2:]
     chunksize_lat, chunksize_lon = hist.data.chunksize[2:]
     n_chunks_lat = math.ceil(n_lat / chunksize_lat)
@@ -33,11 +33,15 @@ def loop_over_chunks(hist, future, f, n_chunks=4, restart_every=10):
             chunk_hist = hist.isel(lat=slice(lat_start, lat_end), lon=slice(lon_start, lon_end)).load()
             chunk_future = future.isel(lat=slice(lat_start, lat_end), lon=slice(lon_start, lon_end)).load()
             result_hist, result_future = f(chunk_hist, chunk_future)
+            del chunk_hist
+            del chunk_future
             out_lon_hist.append(result_hist); out_lon_future.append(result_future)
             counter += 1
             pbar.update(1)
-            if counter % restart_every == 0:
-                client.restart()
+            if client != None:
+                if counter % restart_every == 0:
+                    print('Restarting clinet')
+                    client.restart()
         out_lat_hist.append(xr.concat(out_lon_hist, 'lon')); out_lat_future.append(xr.concat(out_lon_future, 'lon'))
     out_hist = xr.concat(out_lat_hist, 'lat'); out_future = xr.concat(out_lat_future, 'lat')
     return out_hist, out_future
@@ -101,23 +105,25 @@ class MultiModelLargeEnsemble():
         return hist_dsets, future_dsets
         
     def compute_x(self, x_type='quantile_return', load=False, name='', **kwargs):
-#         cluster = dask.distributed.LocalCluster(
-#                     n_workers=8,
-#                     threads_per_worker=1,
-#         #             silence_logs=logging.ERROR
-#         )
-#         self.client = dask.distributed.Client(cluster)
+        cluster = dask.distributed.LocalCluster(
+                    n_workers=8,
+                    threads_per_worker=1,
+        #             silence_logs=logging.ERROR
+        )
+        self.client = dask.distributed.Client(cluster)
         
         
 #         x_hist = []
 #         x_future = []
         x = []
         for model in self.models:
+            hist, future = self.hist_dsets[model], self.future_dsets[model]
             if x_type == 'quantile_return':
-                hist, future = self.hist_dsets[model], self.future_dsets[model]
                 out = self.compute_quantile_return(hist, future, **kwargs)
 #                 x_hist.append(out[0]); x_future.append(out[1])
-                x.append(out)
+            elif x_type in ['mean', 'max']:
+                out = self.compute_avg_stat(hist, future, stat=x_type, **kwargs)
+            x.append(out)
         
         model_dim = xr.DataArray(self.models, coords={'model': self.models}, name='model')
 #         x_hist = xr.concat(x_hist, dim=model_dim)
@@ -131,7 +137,6 @@ class MultiModelLargeEnsemble():
                                 rolling_average=10
                                ):
         hist = hist.sel(time=hist_slice)
-        future = future
         
         #rolling average 
         hist = hist.rolling(time=consec_days, center=True).mean()
@@ -151,20 +156,45 @@ class MultiModelLargeEnsemble():
             occ_future = da_future > q_values
             occ_future = occ_future.assign_coords({'q_values': q_values})
             occ_hist = occ_hist.assign_coords({'q_values': q_values})
+            occ_hist = occ_hist.resample(time='AS').sum()
+            occ_future = occ_future.resample(time='AS').sum()
             return occ_hist, occ_future
             
-        occ_hist, occ_future = loop_over_chunks(hist, future, quantile_func)
+        occ_hist, occ_future = loop_over_chunks(hist, future, quantile_func, client=self.client)
         
         # Resample and average
 #         occ_hist = occ_hist.resample(time='AS').sum().rolling(time=rolling_average, center=True).sum()
 #         occ_future = occ_future.resample(time='AS').sum().rolling(time=rolling_average, center=True).sum()
 #         return occ_hist, occ_future
         occ = xr.concat([occ_hist, occ_future], 'time')
-        occ = occ.resample(time='AS').sum().rolling(time=rolling_average, center=True).sum()
+        occ = occ.rolling(time=rolling_average, center=True).sum()
         print('WARNING: Check again for EC-Earth with different # members')
         return occ
         
+    def compute_avg_stat(self, hist, future, hist_slice=slice(None, None), rolling_average=10,
+                         stat='mean'):
+        """Compute yearly mean"""
+        hist = hist.sel(time=hist_slice)
         
+        def func(da_hist, da_future):
+            if stat == 'mean':
+                hist = da_hist.resample(time='AS').mean()
+                future = da_future.resample(time='AS').mean()
+            elif stat == 'max':
+                hist = da_hist.resample(time='AS').max()
+                future = da_future.resample(time='AS').max()
+            return hist, future
+        hist, future = loop_over_chunks(hist, future, mean_func)
+        
+        # bias correction
+        ref = hist.mean(('time', 'member_id'))
+        x = xr.concat([hist, future], 'time')
+        x = x - ref
+        x = x.rolling(time=rolling_average, center=True).mean()
+        return x
+    
+    def compute_TXx_quantile_return(self):
+        raise NotImplementedError
     
     def compute_fit(self):
         data = self.x.isel(member_id=0)
