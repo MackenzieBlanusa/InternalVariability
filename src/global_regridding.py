@@ -188,7 +188,7 @@ def regrid_global(dx, bucket, path, source_id, experiment_id, variable_id, table
             if source_id in ['cmip6', 'EC-Earth3']:   # Fix for slightly varying time dimensions
                 ds = ds.sel(time=slice('1970', '2014'))
                 if first:
-                    tmp = ds.copy().rename({variable_id: 'tmp'}).squeeze
+                    tmp = ds.copy().rename({variable_id: 'tmp'}).squeeze()
                 else:
                     ds = xr.merge([ds, tmp])[[variable_id]]
             else:
@@ -197,7 +197,7 @@ def regrid_global(dx, bucket, path, source_id, experiment_id, variable_id, table
             ds = ds.sel(time=slice('2015', '2100'))
             if source_id == 'cmip6':
                 if first:
-                    tmp = ds.copy().rename({variable_id: 'tmp'})
+                    tmp = ds.copy().rename({variable_id: 'tmp'}).squeeze()
                 else:
                     ds = xr.merge([ds, tmp])[[variable_id]]
                 
@@ -207,6 +207,7 @@ def regrid_global(dx, bucket, path, source_id, experiment_id, variable_id, table
         ds_out = regrid_ds(ds, dx)
         ds_out = ds_out.chunk(out_chunks)
         del ds_out.attrs['intake_esm_varname']   # Have to do that because can't save None...
+        print(ds_out)
         if first:
             ds_out.to_zarr(save_path, consolidated=True, mode='w')
             first = False
