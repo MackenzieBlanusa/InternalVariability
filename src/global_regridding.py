@@ -101,9 +101,14 @@ def load_cmip_cat(experiment_id, variable_id, table_id, source_id, member_id=Non
         variable_id= variable_id,
         table_id = table_id,
         source_id = source_id,
-        grid_label=['gn','gr','gr1'],
-        member_id=member_id
+#         grid_label=['gn','gr','gr1'],
+#         member_id=member_id
     )
+    if member_id:
+        cat = cat.search(
+            grid_label=['gn','gr','gr1'],
+            member_id=member_id
+        )
     return cat
 
 def fix_ecearth_lat(ds):
@@ -183,13 +188,19 @@ def regrid_global(dx, bucket, path, source_id, experiment_id, variable_id, table
             if source_id in ['cmip6', 'EC-Earth3']:   # Fix for slightly varying time dimensions
                 ds = ds.sel(time=slice('1970', '2014'))
                 if first:
-                    tmp = ds.copy().rename({variable_id: 'tmp'})
+                    tmp = ds.copy().rename({variable_id: 'tmp'}).squeeze
                 else:
                     ds = xr.merge([ds, tmp])[[variable_id]]
             else:
                 ds = ds.sel(time=slice('1920', '2014'))
         else:
             ds = ds.sel(time=slice('2015', '2100'))
+            if source_id == 'cmip6':
+                if first:
+                    tmp = ds.copy().rename({variable_id: 'tmp'})
+                else:
+                    ds = xr.merge([ds, tmp])[[variable_id]]
+                
 #         if ds.lon > 180 or ds.lon < -180:
 #             ds = ds.assign_coords(lon=((ds.lon + 180) % 360 - 180))
 #         ds = ds.assign_coords({'member_id': ds.variant_label}).expand_dims('member_id')
