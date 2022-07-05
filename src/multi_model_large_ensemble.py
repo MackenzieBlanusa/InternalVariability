@@ -105,24 +105,31 @@ class MultiModelLargeEnsemble():
         return hist_dsets, future_dsets
         
     def compute_x(self, x_type='quantile_return', load=False, name='', **kwargs):
-        cluster = dask.distributed.LocalCluster(
-                    n_workers=8,
-                    threads_per_worker=1,
-        #             silence_logs=logging.ERROR
-        )
-        self.client = dask.distributed.Client(cluster)
+        if not load and not hasattr(self, 'client'):
+            cluster = dask.distributed.LocalCluster(
+                        n_workers=8,
+                        threads_per_worker=1,
+            #             silence_logs=logging.ERROR
+            )
+            self.client = dask.distributed.Client(cluster)
         
         
 #         x_hist = []
 #         x_future = []
         x = []
         for model in self.models:
-            hist, future = self.hist_dsets[model], self.future_dsets[model]
-            if x_type == 'quantile_return':
-                out = self.compute_quantile_return(hist, future, **kwargs)
-#                 x_hist.append(out[0]); x_future.append(out[1])
-            elif x_type in ['mean', 'max']:
-                out = self.compute_avg_stat(hist, future, stat=x_type, **kwargs)
+            save_name = f'gcs://{self.bucket}/{self.path}/{name}/{model}.zarr'
+            if load:
+                out = xr.open_zarr(save_name, consolidated=True)[self.variable]
+            else:
+                hist, future = self.hist_dsets[model], self.future_dsets[model]
+                if x_type == 'quantile_return':
+                    out = self.compute_quantile_return(hist, future, **kwargs)
+    #                 x_hist.append(out[0]); x_future.append(out[1])
+                elif x_type in ['mean', 'max']:
+                    out = self.compute_avg_stat(hist, future, stat=x_type, **kwargs)
+                print('Saving:', save_name)
+                out.to_dataset().to_zarr(save_name, consolidated=True, mode='w')
             x.append(out)
         
         model_dim = xr.DataArray(self.models, coords={'model': self.models}, name='model')
