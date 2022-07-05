@@ -128,7 +128,7 @@ def regrid_global(dx, bucket, path, source_id, experiment_id, variable_id, table
     
     # Load catalog
     if source_id == 'cmip6':
-        models = ['CESM2-WACCM','CMCC-CM2-SR5','CMCC-ESM2',
+        models = ['CMCC-CM2-SR5','CMCC-ESM2',
           'EC-Earth3','EC-Earth3-Veg-LR','GFDL-ESM4','IITM-ESM','INM-CM4-8','INM-CM5-0',
           'IPSL-CM6A-LR','KACE-1-0-G','MIROC6','MPI-ESM1-2-HR','MPI-ESM1-2-LR','NorESM2-MM']
         cat = load_cmip_cat(
@@ -182,24 +182,29 @@ def regrid_global(dx, bucket, path, source_id, experiment_id, variable_id, table
         if source_id == 'EC-Earth3':
             ds = fix_ecearth_lat(ds)
 #         import pdb; pdb.set_trace()
-        ds = convert_calendar(ds, 'daily' if table_id=='day' else 'monthly')
-        ds = drop_bounds_height(ds)
+        
+        # time slice
         if experiment_id == 'historical':
-            if source_id in ['cmip6', 'EC-Earth3']:   # Fix for slightly varying time dimensions
+            if source_id in ['cmip6', 'EC-Earth3']:
                 ds = ds.sel(time=slice('1970', '2014'))
-                if first:
-                    tmp = ds.copy().rename({variable_id: 'tmp'}).squeeze()
-                else:
-                    ds = xr.merge([ds, tmp])[[variable_id]]
             else:
                 ds = ds.sel(time=slice('1920', '2014'))
         else:
-            ds = ds.sel(time=slice('2015', '2100'))
+            ds = ds.sel(time=slice('2015', '2099'))
+        
+        ds = convert_calendar(ds, 'daily' if table_id=='day' else 'monthly')
+        ds = drop_bounds_height(ds)
+        
+        if experiment_id == 'historical':
+            if source_id in ['cmip6', 'EC-Earth3']:   # Fix for slightly varying time dimensions
+                t = np.arange('1970-01-01', '2015-01-01', np.timedelta64(1, 'D'), dtype='datetime64')
+                t = xr.DataArray(t, coords={'time': t}, name='tmp')
+                ds = xr.merge([ds, t])[[variable_id]]
+        else:
             if source_id == 'cmip6':
-                if first:
-                    tmp = ds.copy().rename({variable_id: 'tmp'}).squeeze()
-                else:
-                    ds = xr.merge([ds, tmp])[[variable_id]]
+                t = np.arange('2015-01-01', '2100-01-01', np.timedelta64(1, 'D'), dtype='datetime64')
+                t = xr.DataArray(t, coords={'time': t}, name='tmp')
+                ds = xr.merge([ds, t])[[variable_id]]
                 
 #         if ds.lon > 180 or ds.lon < -180:
 #             ds = ds.assign_coords(lon=((ds.lon + 180) % 360 - 180))

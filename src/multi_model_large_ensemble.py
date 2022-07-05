@@ -30,11 +30,14 @@ def loop_over_chunks(hist, future, f, n_chunks=4, restart_every=10, client=None)
             lon_start = j * (chunksize_lon * n_chunks)
             lon_end = (j + 1) * (chunksize_lon * n_chunks)
     #         print((lat_start, lat_end), (lon_start, lon_end))
-            chunk_hist = hist.isel(lat=slice(lat_start, lat_end), lon=slice(lon_start, lon_end)).load()
-            chunk_future = future.isel(lat=slice(lat_start, lat_end), lon=slice(lon_start, lon_end)).load()
+            chunk_hist = hist.isel(lat=slice(lat_start, lat_end), lon=slice(lon_start, lon_end))
+            chunk_future = future.isel(lat=slice(lat_start, lat_end), lon=slice(lon_start, lon_end))
+            chunk_hist.load()
+            chunk_future.load()
             result_hist, result_future = f(chunk_hist, chunk_future)
             del chunk_hist
             del chunk_future
+            print(psutil.virtual_memory()[3] / 1024 / 1024 / 1024)
             out_lon_hist.append(result_hist); out_lon_future.append(result_future)
             counter += 1
             pbar.update(1)
@@ -104,14 +107,14 @@ class MultiModelLargeEnsemble():
             future_dsets[model] = future
         return hist_dsets, future_dsets
         
-    def compute_x(self, x_type='quantile_return', load=False, name='', **kwargs):
-        if not load and not hasattr(self, 'client'):
-            cluster = dask.distributed.LocalCluster(
-                        n_workers=8,
-                        threads_per_worker=1,
-            #             silence_logs=logging.ERROR
-            )
-            self.client = dask.distributed.Client(cluster)
+    def compute_x(self, x_type='quantile_return', load=False, name=None, **kwargs):
+#         if not load and not hasattr(self, 'client'):
+#             cluster = dask.distributed.LocalCluster(
+#                         n_workers=8,
+#                         threads_per_worker=1,
+#             #             silence_logs=logging.ERROR
+#             )
+#             self.client = dask.distributed.Client(cluster)
         
         
 #         x_hist = []
@@ -128,8 +131,9 @@ class MultiModelLargeEnsemble():
     #                 x_hist.append(out[0]); x_future.append(out[1])
                 elif x_type in ['mean', 'max']:
                     out = self.compute_avg_stat(hist, future, stat=x_type, **kwargs)
-                print('Saving:', save_name)
-                out.to_dataset().to_zarr(save_name, consolidated=True, mode='w')
+                if name:
+                    print('Saving:', save_name)
+                    out.to_dataset().to_zarr(save_name, consolidated=True, mode='w')
             x.append(out)
         
         model_dim = xr.DataArray(self.models, coords={'model': self.models}, name='model')
@@ -167,7 +171,9 @@ class MultiModelLargeEnsemble():
             occ_future = occ_future.resample(time='AS').sum()
             return occ_hist, occ_future
             
-        occ_hist, occ_future = loop_over_chunks(hist, future, quantile_func, client=self.client)
+        occ_hist, occ_future = loop_over_chunks(hist, future, quantile_func
+#                                                 , client=self.client
+                                               )
         
         # Resample and average
 #         occ_hist = occ_hist.resample(time='AS').sum().rolling(time=rolling_average, center=True).sum()
