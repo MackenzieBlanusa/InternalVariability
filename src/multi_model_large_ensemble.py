@@ -51,7 +51,7 @@ def loop_over_chunks(hist, future, f, n_chunks=4, restart_every=10, client=None)
 
 
 class MultiModelLargeEnsemble():
-    def __init__(self, models, variable, granularity, lat, lon, bucket, path):
+    def __init__(self, models, variable, granularity, lat, lon, bucket, path, scenario='ssp585'):
         """Multi Model Large Ensemble class used to get CMIP6 and CESM data, and merge.
         
         Parameters
@@ -81,18 +81,43 @@ class MultiModelLargeEnsemble():
         self.lon = lon
         self.bucket = bucket
         self.path = path 
+        self.scenario = scenario
 #         self.load = load 
         
-        self.hist_dsets, self.future_dsets = self.load_datasets()   # dicts at this point with model as key
+        if self.models == 'cmip6':
+            self.hist_dsets, self.future_dsets = self.load_cmip6()   # dicts at this point with model as key
+        else:
+            self.hist_dsets, self.future_dsets = self.load_datasets()
         self.x = None
         self.results = xr.Dataset()
         
+    def load_cmip6(self):
         
+        hist_path = f'gcs://{self.bucket}/{self.path}/cmip6/historical/{self.granularity}/{self.variable}.zarr'
+        future_path = f'gcs://{self.bucket}/{self.path}/cmip6/{self.scenario}/{self.granularity}/{self.variable}.zarr'
+        hist = xr.open_zarr(hist_path, consolidated=True)[self.variable]
+        future = xr.open_zarr(future_path, consolidated=True)[self.variable]
+        if type(self.lat) is slice:
+            hist = hist.sel(lat=self.lat, lon=self.lon)
+            future = future.sel(lat=self.lat, lon=self.lon)
+        else:
+            hist = hist.sel(lat=[self.lat], lon=[self.lon], method='nearest')
+            future = future.sel(lat=[self.lat], lon=[self.lon], method='nearest')
+            
+        # Split into separate datasets
+        hist_dsets, future_dsets = {}, {}
+        for m in hist.model.values:
+            hist_dsets[m] = hist.sel(model=m)
+            future_dsets[m] = future.sel(model=m)
+        return hist_dsets, future_dsets
+        
+    
+    
     def load_datasets(self):
         hist_dsets, future_dsets = {}, {}
         for model in self.models:
             hist_path = f'gcs://{self.bucket}/{self.path}/{model}/historical/{self.granularity}/{self.variable}.zarr'
-            future_path = f'gcs://{self.bucket}/{self.path}/{model}/ssp585/{self.granularity}/{self.variable}.zarr'
+            future_path = f'gcs://{self.bucket}/{self.path}/{model}/{self.scenario}/{self.granularity}/{self.variable}.zarr'
             hist = xr.open_zarr(hist_path, consolidated=True)[self.variable]
             future = xr.open_zarr(future_path, consolidated=True)[self.variable]
             hist = hist.assign_coords({'member_id': np.arange(len(hist.member_id)) + 1})
@@ -181,7 +206,6 @@ class MultiModelLargeEnsemble():
 #         return occ_hist, occ_future
         occ = xr.concat([occ_hist, occ_future], 'time')
         occ = occ.rolling(time=rolling_average, center=True).sum()
-        print('WARNING: Check again for EC-Earth with different # members')
         return occ
         
     def compute_avg_stat(self, hist, future, hist_slice=slice(None, None), rolling_average=10,
@@ -197,7 +221,7 @@ class MultiModelLargeEnsemble():
                 hist = da_hist.resample(time='AS').max()
                 future = da_future.resample(time='AS').max()
             return hist, future
-        hist, future = loop_over_chunks(hist, future, mean_func)
+        hist, future = loop_over_chunks(hist, future, func)
         
         # bias correction
         ref = hist.mean(('time', 'member_id'))
