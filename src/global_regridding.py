@@ -173,10 +173,12 @@ def regrid_global(dx, bucket, path, source_id, experiment_id, variable_id, table
     # Regrid and save every dataset
     first = True
 #     for i in tqdm(range(len(dsets.member_id))):
-    for i in tqdm(range(len(dsets))):
-#         ds = dsets.isel(member_id=[i])
-        ds = dsets[i]
-        ds = ds.assign_coords({'member_id': ds.variant_label}).expand_dims('member_id')
+    for i in tqdm(range(len(dsets.member_id if source_id == 'cesm_lens' else dsets))):
+        if source_id == 'cesm_lens':
+            ds = dsets.isel(member_id=[i])
+        else:
+            ds = dsets[i]
+            ds = ds.assign_coords({'member_id': ds.variant_label}).expand_dims('member_id')
         if source_id == 'cmip6':
             ds = ds.assign_coords({'model': ds.source_id}).expand_dims('model')
         if source_id == 'EC-Earth3':
