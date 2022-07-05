@@ -2,6 +2,7 @@ import xarray as xr
 import numpy as np
 from statsmodels.distributions.empirical_distribution import StepFunction
 
+
 class MyECDF(StepFunction):
     def __init__(self, x, side='right'):
         x = np.sort(x)
@@ -20,32 +21,35 @@ def prepare_data(data: xr.DataArray, threshold: float = 0.1) -> xr.DataArray:
                            np.random.uniform(0, threshold, len(data)))
     return prep_data.where(~data.isnull())
 
+
 def prepare_data_numpy(data: xr.DataArray, threshold: float = 0.1) -> xr.DataArray:
     random_array = np.random.uniform(0, threshold, len(data))
     prep_data = np.where(data > threshold, data, random_array)
     return np.where(np.isfinite(data), prep_data, np.nan)
 
+
 def qdm_large_ensemble(hist, future, reanalysis):
     """QDM for daily data"""
-    if 'model' in hist.dims:
-        assert sorted(hist.model) == sorted(future.model)
+    if isinstance(hist, dict):
+        assert sorted(hist.keys()) == sorted(future.keys())
 
-        objects = []
-        for model in list(hist.model.values):
+        qdm_le = {}
+        for model in sorted(hist.keys()):
             pp_dataset = qdm_large_ensemble(
-                hist.sel(model=model),
-                future.sel(model=model),
+                hist[model],
+                future[model],
                 reanalysis
             )
-            objects.append(pp_dataset)
+            qdm_le[model] = pp_dataset
             print(f'{model} has been post-processed')
-        return xr.concat(objects, dim=hist.model)
+        return qdm_le
 
     else:
         return implement_quantile_delta_mapping(hist, future, reanalysis)
 
-def create_rolling_window(X,time_window=10):
-        # define time deltas for days (24 h), months (28, 29, 30, and 31 days ),
+
+def create_rolling_window(X, time_window=10):
+    # define time deltas for days (24 h), months (28, 29, 30, and 31 days ),
     # and year (regular and leap year)
     recurrence = 'D'
 
@@ -55,19 +59,21 @@ def create_rolling_window(X,time_window=10):
 
     # create data to append in the beginning to ensure static time window
     X_1_slice = X.sel(time=slice(str(years[0] + int(time_window / 2)),
-                                    str(years[0] + time_window - 1)))
+                                 str(years[0] + time_window - 1)))
     X1_dates = np.arange(start_date - np.timedelta64(len(X_1_slice.time), recurrence),
-                            start_date,
-                            dtype=f'datetime64[{recurrence}]')
-    X_1 = X_1_slice.assign_coords({'member':X.member.values, 'time':X1_dates})
+                         start_date,
+                         dtype=f'datetime64[{recurrence}]')
+    X_1 = X_1_slice.assign_coords(
+        {'member_id': X.member_id.values, 'time': X1_dates})
 
     # create data to append in the end
     X_2_slice = X.sel(time=slice(str(years[-1] - time_window + 1),
-                                    str(years[-1] - int(time_window / 2))))
+                                 str(years[-1] - int(time_window / 2))))
     X2_dates = np.arange(end_date + np.timedelta64(1, recurrence),
-                            end_date + np.timedelta64(len(X_2_slice.time) + 1, recurrence),
-                            dtype=f'datetime64[{recurrence}]')
-    X_2 = X_2_slice.assign_coords(time=X2_dates, member=X.member.values)
+                         end_date +
+                         np.timedelta64(len(X_2_slice.time) + 1, recurrence),
+                         dtype=f'datetime64[{recurrence}]')
+    X_2 = X_2_slice.assign_coords(time=X2_dates, member_id=X.member_id.values)
 
     # append data, construct rolling and select original years
     X_final = xr.concat([X_1, X, X_2], dim='time')
@@ -83,6 +89,7 @@ def create_rolling_window(X,time_window=10):
         time=X_rolling.time.dt.month == X_rolling.time.dt.month.values[0])
 
     return X_rolling
+
 
 def implement_quantile_delta_mapping(
     X: xr.DataArray, hist: xr.DataArray, obs: xr.DataArray
@@ -102,13 +109,13 @@ def implement_quantile_delta_mapping(
     y_hat: xr.Dataset or xr.DataArray
         post-processed data
     """
-    obs_r = obs.where(obs.time==hist.time)
-    hist_r = hist.where(obs.time==hist.time)
+    obs_r = obs.where(obs.time == hist.time)
+    hist_r = hist.where(obs.time == hist.time)
 
     hist_flat = hist_r.values.flatten()
 
     if obs.name == 'tp':
-        obs_r =  prepare_data(obs_r)
+        obs_r = prepare_data(obs_r)
         hist_r = prepare_data_numpy(hist_r)
         X = prepare_data_numpy(X)
 
@@ -123,13 +130,15 @@ def implement_quantile_delta_mapping(
         reanalysis_value = np.nanquantile(obs_r, np.nan_to_num(quantiles))
 
         if obs.name == 'tp':
-            X_clean_post_p = (reanalysis_value * X_cut.values.flatten()) /historical_value
+            X_clean_post_p = (reanalysis_value *
+                              X_cut.values.flatten()) / historical_value
         else:
             X_clean_post_p = reanalysis_value + X_cut.values.flatten() - historical_value
 
         X_clean_post_p = X_clean_post_p.reshape(X_cut.shape, order='C')
 
-        data = xr.DataArray(X_clean_post_p, dims=X_cut.dims, coords=X_cut.coords)
+        data = xr.DataArray(X_clean_post_p, dims=X_cut.dims,
+                            coords=X_cut.coords)
         years.append(data)
 
     complete_data = xr.concat(years, dim='time')
