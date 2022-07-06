@@ -96,6 +96,7 @@ class MultiModelLargeEnsemble():
         
         hist_path = f'gcs://{self.bucket}/{self.path}/cmip6/historical/{self.granularity}/{self.variable}.zarr'
         future_path = f'gcs://{self.bucket}/{self.path}/cmip6/{self.scenario}/{self.granularity}/{self.variable}.zarr'
+        print(hist_path, future_path)
         hist = xr.open_zarr(hist_path, consolidated=True)[self.variable]
         future = xr.open_zarr(future_path, consolidated=True)[self.variable]
         if type(self.lat) is slice:
@@ -110,6 +111,7 @@ class MultiModelLargeEnsemble():
         for m in hist.model.values:
             hist_dsets[m] = hist.sel(model=m)
             future_dsets[m] = future.sel(model=m)
+        self.models = hist.model.values
         return hist_dsets, future_dsets
         
     
@@ -161,6 +163,8 @@ class MultiModelLargeEnsemble():
     #                 x_hist.append(out[0]); x_future.append(out[1])
                 elif x_type in ['mean', 'max']:
                     out = self.compute_avg_stat(hist, future, stat=x_type, **kwargs)
+                elif x_type == 'TXx_quantile':
+                    out = self.compute_TXx_quantile_return(hist, future, **kwargs)
                 if name:
                     print('Saving:', save_name)
                     out.to_dataset().to_zarr(save_name, consolidated=True, mode='w')
@@ -235,8 +239,26 @@ class MultiModelLargeEnsemble():
         x = x.rolling(time=rolling_average, center=True).mean()
         return x
     
-    def compute_TXx_quantile_return(self):
-        raise NotImplementedError
+    def compute_TXx_quantile_return(self, hist, future, return_period=10, hist_slice=slice('1995', '2014'), 
+                                    rolling_average=10):
+        x = self.compute_avg_stat(hist, future, hist_slice, rolling_average, stat='max')
+        assert hist_slice.stop != None, 'This will lead to wrong behavior.'
+        hist = x.sel(time=hist_slice)
+        future = x.sel(time=slice(str(int(hist_slice.stop) + 1), None))
+        
+        # find number of expected events in period covered by x
+        expected_events = len(np.unique(hist.time.dt.year)) / return_period
+        q = 1 - expected_events / len(hist.time)
+        
+        q_values = hist.quantile(q, ('time', 'member_id'))
+        occ_hist = hist > q_values
+        occ_future = future > q_values
+        occ_future = occ_future.assign_coords({'q_values': q_values})
+        occ_hist = occ_hist.assign_coords({'q_values': q_values})
+        
+        occ = xr.concat([occ_hist, occ_future], 'time')
+        occ = occ.rolling(time=rolling_average, center=True).sum()
+        return occ
     
     def compute_fit(self):
         data = self.x.isel(member_id=0)
@@ -253,6 +275,6 @@ class MultiModelLargeEnsemble():
     def compute_FIT(self):
         self.results['FIT'] = self.compute_fit()
         self.results['M_FIT'] = self.results['FIT'].var('model')
-        self.results['I_FIT'] = (self.x - self.results['FIT']).var('time')
-        self.results['Ibar_FIT'] = self.results['I_LE'].mean('model')
+        self.results['I_FIT'] = (self.x.isel(member_id=0) - self.results['FIT']).var('time')
+        self.results['Ibar_FIT'] = self.results['I_FIT'].mean('model')
         self.results['T_FIT'] = self.x.var(('model', 'member_id'))
