@@ -1,0 +1,11 @@
+# ssp126, ssp245, ssp370, ssp585
+
+python global_regridding.py 2.5 climateai_data_repository tmp/global_cmip_2.5deg cmip6 ssp126 tas && \
+python global_regridding.py 2.5 climateai_data_repository tmp/global_cmip_2.5deg cmip6 ssp126 tasmax && \
+python global_regridding.py 2.5 climateai_data_repository tmp/global_cmip_2.5deg cmip6 ssp126 pr && \
+python global_regridding.py 2.5 climateai_data_repository tmp/global_cmip_2.5deg cmip6 ssp245 tas && \
+python global_regridding.py 2.5 climateai_data_repository tmp/global_cmip_2.5deg cmip6 ssp245 tasmax && \
+python global_regridding.py 2.5 climateai_data_repository tmp/global_cmip_2.5deg cmip6 ssp245 pr && \
+python global_regridding.py 2.5 climateai_data_repository tmp/global_cmip_2.5deg cmip6 ssp370 tas && \
+python global_regridding.py 2.5 climateai_data_repository tmp/global_cmip_2.5deg cmip6 ssp370 tasmax && \
+python global_regridding.py 2.5 climateai_data_repository tmp/global_cmip_2.5deg cmip6 ssp370 pr
