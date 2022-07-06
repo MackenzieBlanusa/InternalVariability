@@ -174,10 +174,13 @@ def regrid_global(dx, bucket, path, source_id, experiment_id, variable_id, table
     first = True
 #     for i in tqdm(range(len(dsets.member_id))):
     for i in tqdm(range(len(dsets))):
+#         import pdb; pdb.set_trace()
 #         ds = dsets.isel(member_id=[i])
         ds = dsets[i]
         ds = ds.assign_coords({'member_id': ds.variant_label}).expand_dims('member_id')
         if source_id == 'cmip6':
+            print(ds.source_id)
+            assert ds.source_id in models, 'Wrong model name'
             ds = ds.assign_coords({'model': ds.source_id}).expand_dims('model')
         if source_id == 'EC-Earth3':
             ds = fix_ecearth_lat(ds)
