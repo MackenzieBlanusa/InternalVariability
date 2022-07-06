@@ -51,7 +51,7 @@ def loop_over_chunks(hist, future, f, n_chunks=4, restart_every=10, client=None)
 
 
 class MultiModelLargeEnsemble():
-    def __init__(self, models, variable, granularity, lat, lon, bucket, path, scenario='ssp585', name=None):
+    def __init__(self, models, variable, granularity, lat, lon, bucket, path, scenario='ssp585'):
         """Multi Model Large Ensemble class used to get CMIP6 and CESM data, and merge.
         
         Parameters
@@ -86,12 +86,6 @@ class MultiModelLargeEnsemble():
         
         if self.models == 'cmip6':
             self.hist_dsets, self.future_dsets = self.load_cmip6()   # dicts at this point with model as key
-        elif name:
-            self.hist_path = f'gcs://{bucket}/{path}/{name}/hist_qdm_{variable}.zarr'
-            self.future_path = f'gcs://{bucket}/{path}/{name}/future_qdm_{variable}.zarr'
-
-            self.hist_dsets = xr.open_zarr(self.hist_path, consolidated=True).load()
-            self.future_dsets = xr.open_zarr(self.future_path, consolidated=True).load()
         else:
             self.hist_dsets, self.future_dsets = self.load_datasets()
 

@@ -2,7 +2,6 @@ import xarray as xr
 from multi_model_large_ensemble import MultiModelLargeEnsemble
 from post_p_large_ensemble import qdm_large_ensemble
 
-from app.main.src.climate_projection import ClimateProjection
 from app.main.src.utils import cmip2era
 
 regions_dict = {
@@ -17,11 +16,12 @@ regions_dict = {
 variable = 'tasmax'
 
 models_for_vars = {
-    'tas': ['CanESM5','cesm_lens','MIROC6','MPI-ESM1-2-LR','EC-Earth3'],
-    'pr' : ['CanESM5','cesm_lens','MIROC6','MPI-ESM1-2-LR'],
-    'tasmax': ['CanESM5','cesm_lens','MIROC6','MPI-ESM1-2-LR','EC-Earth3'],
+    'tas': ['CanESM5', 'cesm_lens', 'MIROC6', 'MPI-ESM1-2-LR', 'EC-Earth3'],
+    'pr': ['CanESM5', 'cesm_lens', 'MIROC6', 'MPI-ESM1-2-LR'],
+    'tasmax': ['CanESM5', 'cesm_lens', 'MIROC6', 'MPI-ESM1-2-LR', 'EC-Earth3'],
 }
-for region in ['australia']: #,['USwest', 'europe', 'australia', 'tropics', 'USeast', 'iceland']:
+# ,['USwest', 'europe', 'australia', 'tropics', 'USeast', 'iceland']:
+for region in ['australia']:
     lat = regions_dict[region]['lat']
     lon = regions_dict[region]['lon']
     print(f'Processing {region} future for {variable}')
@@ -47,10 +47,11 @@ for region in ['australia']: #,['USwest', 'europe', 'australia', 'tropics', 'USe
         reanalysis_daily[cmip2era[variable]]
     )
 
-    cp = ClimateProjection(
-        lat, lon, cmip2era[variable], 'ssp585', projection_name=region,
-        gcs_bucket='climateai_data_repository', gcs_path='tmp/internal_variability/qdm_from_global'
-    )
-    cp._save_ds(large_ens_future, f'future_qdm_{variable}', chunks=None)
-    cp._save_ds(large_ens_hist, f'hist_qdm_{variable}', chunks=None)
+    for model in large_ens_future.keys():
+        future_path = f'gcs://{MMLE.bucket}/tmp/qdm_{region}/{model}/historical/{MMLE.granularity}/{MMLE.variable}.zarr'
+        large_ens_future[model].to_dataset(name=variable).to_zarr(path, consolidated=True, mode='w')
+
+        hist_path = f'gcs://{MMLE.bucket}/tmp/qdm_{region}/{model}/{MMLE.scenario}/{MMLE.granularity}/{MMLE.variable}.zarr'
+        large_ens_hist[model].to_dataset(name=variable).to_zarr(path, consolidated=True, mode='w')
+
     print(f'Done post-processing {region}!')
