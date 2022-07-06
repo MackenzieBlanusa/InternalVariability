@@ -36,8 +36,8 @@ def qdm_large_ensemble(hist, future, reanalysis):
         qdm_le = {}
         for model in sorted(hist.keys()):
             pp_dataset = qdm_large_ensemble(
-                hist[model],
-                future[model],
+                hist[model].load(),
+                future[model].load(),
                 reanalysis
             )
             qdm_le[model] = pp_dataset
