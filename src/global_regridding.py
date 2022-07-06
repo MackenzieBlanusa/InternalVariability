@@ -183,7 +183,7 @@ def regrid_global(dx, bucket, path, source_id, experiment_id, variable_id, table
         if source_id == 'cmip6':
             print(ds.source_id)
             assert ds.source_id in models, 'Wrong model name'
-            ds = ds.assign_coords({'model': ds.source_id}).expand_dims('model')
+            ds = ds.assign_coords({'model': np.array(ds.source_id).astype('<U30')}).expand_dims('model')
         if source_id == 'EC-Earth3':
             ds = fix_ecearth_lat(ds)
 #         import pdb; pdb.set_trace()
