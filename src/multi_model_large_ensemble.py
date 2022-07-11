@@ -150,7 +150,7 @@ class MultiModelLargeEnsemble():
         for model in self.models:
             save_name = f'gcs://{self.bucket}/{self.path}/{name}/{model}.zarr'
             if load:
-                print('Saving:', save_name)
+                print('Loading:', save_name)
                 out = xr.open_zarr(save_name, consolidated=True)[self.variable]
             else:
                 hist, future = self.hist_dsets[model], self.future_dsets[model]
