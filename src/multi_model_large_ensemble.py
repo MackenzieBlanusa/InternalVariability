@@ -151,12 +151,9 @@ class MultiModelLargeEnsemble():
         for model in self.models:
             save_name = f'gcs://{self.bucket}/{self.path}/{name}/{model}.zarr'
             if load:
-                try:
-                    out = xr.open_zarr(save_name, consolidated=True)[self.variable]
-                except KeyError:
-                    print('File not found, computing new')
-                    load= False
-            if not load:
+                print('Loading:', save_name)
+                out = xr.open_zarr(save_name, consolidated=True)[self.variable]
+            else:
                 hist, future = self.hist_dsets[model], self.future_dsets[model]
                 if x_type == 'quantile_return':
                     out = self.compute_quantile_return(hist, future, **kwargs)
