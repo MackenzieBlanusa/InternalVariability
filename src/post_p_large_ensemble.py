@@ -1,6 +1,7 @@
 import xarray as xr
 import numpy as np
 from statsmodels.distributions.empirical_distribution import StepFunction
+from math import floor
 
 
 class MyECDF(StepFunction):
@@ -28,7 +29,7 @@ def prepare_data_numpy(data: xr.DataArray, threshold: float = 0.1) -> xr.DataArr
     return np.where(np.isfinite(data), prep_data, np.nan)
 
 
-def qdm_large_ensemble(hist, future, reanalysis):
+def qdm_large_ensemble(hist, future, reanalysis, monthly_w=0):
     """QDM for daily data"""
     if isinstance(hist, dict):
         assert sorted(hist.keys()) == sorted(future.keys())
@@ -38,14 +39,18 @@ def qdm_large_ensemble(hist, future, reanalysis):
             pp_dataset = qdm_large_ensemble(
                 hist[model].load(),
                 future[model].load(),
-                reanalysis
+                reanalysis,
+                monthly_w
             )
             qdm_le[model] = pp_dataset
             print(f'{model} has been post-processed')
         return qdm_le
 
     else:
-        return implement_quantile_delta_mapping(hist, future, reanalysis)
+        if monthly_w:
+            return run_seasonal_qdm(hist, future, reanalysis)
+        else:
+            return implement_quantile_delta_mapping(hist, future, reanalysis)
 
 
 def create_rolling_window(X, time_window=10):
@@ -117,23 +122,28 @@ def implement_quantile_delta_mapping(
     if obs.name == 'tp':
         obs_r = prepare_data(obs_r)
         hist_r = prepare_data_numpy(hist_r)
-        X = prepare_data_numpy(X)
 
     years = []
     X_rolling = create_rolling_window(X)
     for i in X_rolling.time:
         X_flat = X_rolling.sel(time=i).values.flatten()
         X_cut = X.sel(time=str(i.dt.year.values))
-        quantiles = MyECDF(X_flat)(X_cut.values.flatten())
+
+        if obs.name == 'tp':
+            X_cut_v = prepare_data_numpy(X_cut.values.flatten())
+            X_flat = prepare_data_numpy(X_flat)
+        else:
+            X_cut_v = X_cut.values.flatten()
+        quantiles = MyECDF(X_flat)(X_cut_v)
 
         historical_value = np.nanquantile(hist_flat, np.nan_to_num(quantiles))
         reanalysis_value = np.nanquantile(obs_r, np.nan_to_num(quantiles))
 
         if obs.name == 'tp':
             X_clean_post_p = (reanalysis_value *
-                              X_cut.values.flatten()) / historical_value
+                              X_cut_v) / historical_value
         else:
-            X_clean_post_p = reanalysis_value + X_cut.values.flatten() - historical_value
+            X_clean_post_p = reanalysis_value + X_cut_v - historical_value
 
         X_clean_post_p = X_clean_post_p.reshape(X_cut.shape, order='C')
 
@@ -146,3 +156,29 @@ def implement_quantile_delta_mapping(
         complete_data = complete_data.where(X > 0.1, 0)
 
     return complete_data.where(~X.isnull())
+
+
+def run_seasonal_qdm(
+    X: xr.DataArray, hist: xr.DataArray, obs: xr.DataArray, monthly_w: int = 3
+) -> xr.DataArray:
+    qdm_by_months = []
+    months = np.arange(1, 13)
+    for month in months:
+        monthly_window = np.roll(months, -month + floor(
+            monthly_w / 2) + 1)[:monthly_w]
+
+        hist_s = select_months(hist, monthly_window)
+        obs_s = select_months(obs, monthly_window)
+        X_s = select_months(X, monthly_window)
+        window_qdm = implement_quantile_delta_mapping(X_s, hist_s, obs_s)
+
+        qdm_by_months.append(select_months(window_qdm, [month]))
+
+    dims = xr.DataArray(X.time.values, dims=['time'],
+                        name='time').rename(obs.name)
+    return xr.concat(qdm_by_months, dim=dims).sortby('time').drop_vars(obs.name)
+
+def select_months(
+    data: xr.DataArray, monthly_win
+) -> xr.DataArray:
+    return data.sel(time=data.time.dt.month.isin(monthly_win))
