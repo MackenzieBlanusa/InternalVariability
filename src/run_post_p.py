@@ -24,21 +24,22 @@ regions_dict = {
     'tropics': {'lat': 3.9, 'lon': -53.1}
 }
 
-variable = 'tasmax'
+variable = 'pr'
 
 models_for_vars = {
     'tas': ['CanESM5', 'cesm_lens', 'MIROC6', 'MPI-ESM1-2-LR', 'EC-Earth3'],
-    'pr': ['CanESM5', 'cesm_lens', 'MIROC6', 'MPI-ESM1-2-LR'],
+    'pr': ['CanESM5', 'cesm_lens', 'MIROC6', 'MPI-ESM1-2-LR', 'EC-Earth3'],
     'tasmax': ['CanESM5', 'cesm_lens', 'MIROC6', 'MPI-ESM1-2-LR', 'EC-Earth3'],
 }
 # ,['USwest', 'europe', 'australia', 'tropics', 'USeast', 'iceland']:
-for region in ['USwest', 'europe', 'tropics', 'USeast', 'iceland']:
+for region in ['australia', 'europe', 'tropics', 'USwest', 'USeast', 'iceland']:
     lat = regions_dict[region]['lat']
     lon = regions_dict[region]['lon']
     print(f'Processing {region} future for {variable}')
 
     MMLE = MultiModelLargeEnsemble(models=models_for_vars[variable],
                                    variable=variable, granularity='day',
+                                   scenario='ssp585',
                                    lat=lat, lon=lon,
                                    bucket='climateai_data_repository',
                                    path='tmp/global_cmip_2.5deg')
@@ -48,19 +49,25 @@ for region in ['USwest', 'europe', 'tropics', 'USeast', 'iceland']:
 
     if variable in ('tasmax', 'tas'):
         reanalysis_daily[cmip2era[variable]] += 273.15
+        print('Temperature era units converted')
+    elif variable in ('pr'):
+        reanalysis_daily[cmip2era[variable]] *= (997/(1000*24*60*60))
+        print('Precipitation era units converted')
 
     print('Processing historical models')
     large_ens_hist = qdm_large_ensemble(
         MMLE.hist_dsets,
         MMLE.hist_dsets,
-        reanalysis_daily[cmip2era[variable]]
+        reanalysis_daily[cmip2era[variable]],
+        monthly_w = 3
     )
 
     print('Processing future models')
     large_ens_future = qdm_large_ensemble(
         MMLE.future_dsets,
         MMLE.hist_dsets,
-        reanalysis_daily[cmip2era[variable]]
+        reanalysis_daily[cmip2era[variable]],
+        monthly_w = 3
     )
 
     print(f'Done post-processing {region}!')
