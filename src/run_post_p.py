@@ -21,28 +21,22 @@ regions_dict = {
     'iceland':  {'lat': 65, 'lon': -19},
     'europe':  {'lat': 51, 'lon': 10.5},
     'australia': {'lat': -25.2, 'lon': 133.7},
-    'tropics': {'lat': 3.9, 'lon': -53.1}
+    'tropics': {'lat': 3.9, 'lon': 306.9}
 }
 
 variable = 'pr'
 
-models_for_vars = {
-    'tas': ['CanESM5', 'cesm_lens', 'MIROC6', 'MPI-ESM1-2-LR', 'EC-Earth3'],
-    'pr': ['CanESM5', 'cesm_lens', 'MIROC6', 'MPI-ESM1-2-LR', 'EC-Earth3'],
-    'tasmax': ['CanESM5', 'cesm_lens', 'MIROC6', 'MPI-ESM1-2-LR', 'EC-Earth3'],
-}
+models = ['MIROC6', 'CanESM5', 'MPI-ESM1-2-LR', 'EC-Earth3','cesm_lens']
+
 # ,['USwest', 'europe', 'australia', 'tropics', 'USeast', 'iceland']:
-for region in ['australia', 'europe', 'tropics', 'USwest', 'USeast', 'iceland']:
+for region in ['australia', 'europe', 'tropics']: #, 'USwest', 'USeast', 'iceland']:
     lat = regions_dict[region]['lat']
     lon = regions_dict[region]['lon']
     print(f'Processing {region} future for {variable}')
 
-    MMLE = MultiModelLargeEnsemble(models=models_for_vars[variable],
-                                   variable=variable, granularity='day',
-                                   scenario='ssp585',
-                                   lat=lat, lon=lon,
-                                   bucket='climateai_data_repository',
-                                   path='tmp/global_cmip_2.5deg')
+    MMLE = MultiModelLargeEnsemble(models=models, variable=variable, granularity='day',
+                               lat=lat, lon=lon,
+                               bucket='climateai_data_repository', path='tmp/global_cmip_2.5deg')
 
     path = f'gcs://climateai_data_repository/tmp/internal_variability/era_files/{region}/reanalysis_daily.zarr'
     reanalysis_daily = xr.open_zarr(path, consolidated=True).load()

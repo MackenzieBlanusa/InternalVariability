@@ -26,11 +26,8 @@ for region in ['USwest', 'europe', 'australia', 'tropics', 'USeast', 'iceland']:
     cp.reanalysis_daily = ERA(
         cp.lat, cp.lon, cp.variables['reanalysis']['daily'], granularity='daily'
     ).load(ram=True, interp_dx=None)
-    cp.reanalysis_monthly = ERA(
-        cp.lat, cp.lon, cp.variables['reanalysis']['monthly'], granularity='monthly'
-    ).load(ram=True, interp_dx=None)
+
 
     cp._save_ds(cp.reanalysis_daily, 'reanalysis_daily', chunks=None)
-    cp._save_ds(cp.reanalysis_monthly, 'reanalysis_monthly', chunks=None)
 
     print(f'Reanalysis for {region} has been uploaded to GCS')

@@ -43,7 +43,7 @@ def qdm_large_ensemble(X, hist, reanalysis, monthly_w=0):
         return qdm_le
 
     else:
-        threshold = hist.quantile(0.5).values
+        threshold = (hist.where(hist>0).mean()/1000).values
         if monthly_w:
             return run_seasonal_qdm(X, hist, reanalysis, threshold)
         else:
