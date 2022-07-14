@@ -9,3 +9,12 @@ python global_regridding.py 2.5 climateai_data_repository tmp/global_cmip_2.5deg
 python global_regridding.py 2.5 climateai_data_repository tmp/global_cmip_2.5deg cmip6 ssp370 tas && \
 python global_regridding.py 2.5 climateai_data_repository tmp/global_cmip_2.5deg cmip6 ssp370 tasmax && \
 python global_regridding.py 2.5 climateai_data_repository tmp/global_cmip_2.5deg cmip6 ssp370 pr
+
+
+# ACCESS-ESM1-5
+python global_regridding.py 2.5 climateai_data_repository tmp/global_cmip_2.5deg ACCESS-ESM1-5 historical tas && \
+python global_regridding.py 2.5 climateai_data_repository tmp/global_cmip_2.5deg ACCESS-ESM1-5 historical tasmax && \
+python global_regridding.py 2.5 climateai_data_repository tmp/global_cmip_2.5deg ACCESS-ESM1-5 historical pr && \
+python global_regridding.py 2.5 climateai_data_repository tmp/global_cmip_2.5deg ACCESS-ESM1-5 ssp585 tas && \
+python global_regridding.py 2.5 climateai_data_repository tmp/global_cmip_2.5deg ACCESS-ESM1-5 ssp585 tasmax && \
+python global_regridding.py 2.5 climateai_data_repository tmp/global_cmip_2.5deg ACCESS-ESM1-5 ssp585 pr
