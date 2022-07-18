@@ -15,13 +15,19 @@ era2cmip = {
 
 cmip2era = {v: k for k, v in era2cmip.items()}
 
+# regions_dict = {
+#     'USeast': {'lat': 41.3, 'lon': -72.5},
+#     'USwest':  {'lat': 37.7, 'lon': -122.4, },
+#     'iceland':  {'lat': 65, 'lon': -19},
+#     'europe':  {'lat': 51, 'lon': 10.5},
+#     'australia': {'lat': -25.2, 'lon': 133.7},
+#     'tropics': {'lat': 3.9, 'lon': 306.9}
+# }
+
 regions_dict = {
-    'USeast': {'lat': 41.3, 'lon': -72.5},
-    'USwest':  {'lat': 37.7, 'lon': -122.4, },
-    'iceland':  {'lat': 65, 'lon': -19},
-    'europe':  {'lat': 51, 'lon': 10.5},
-    'australia': {'lat': -25.2, 'lon': 133.7},
-    'tropics': {'lat': 3.9, 'lon': 306.9}
+    'Seattle': {'lat': 47.6, 'lon': 237.7},
+    'Sydney':  {'lat': -33.8, 'lon': 151.2},
+    'Lagos':  {'lat': 6.5, 'lon': 3.4},
 }
 
 variable = 'pr'
@@ -29,9 +35,10 @@ variable = 'pr'
 models = ['MIROC6', 'CanESM5', 'MPI-ESM1-2-LR', 'EC-Earth3','cesm_lens']
 
 # ,['USwest', 'europe', 'australia', 'tropics', 'USeast', 'iceland']:
-for region in ['australia', 'europe', 'tropics']: #, 'USwest', 'USeast', 'iceland']:
-    lat = regions_dict[region]['lat']
-    lon = regions_dict[region]['lon']
+for region, lat_lon in regions_dict.items():
+    
+    lat = lat_lon['lat']
+    lon = lat_lon['lon']
     print(f'Processing {region} future for {variable}')
 
     MMLE = MultiModelLargeEnsemble(models=models, variable=variable, granularity='day',
