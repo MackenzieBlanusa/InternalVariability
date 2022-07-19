@@ -262,15 +262,35 @@ class MultiModelLargeEnsemble():
         fit = xr.polyval(data.time, coeffs)
         return fit['polyfit_coefficients']
     
-    def compute_LE(self):
-        self.results['M_LE'] = self.x.mean('member_id').var('model')
-        self.results['I_LE'] = self.x.var('member_id')
-        self.results['Ibar_LE'] = self.results['I_LE'].mean('model')
-        self.results['T_LE'] = self.x.var(('model', 'member_id'))
+    def compute_LE(self, weights_file=None):
+        if weights_file:
+            weights = xr.open_dataarray(weights_file)
+            self.results['M_LE'] = weighted_var(self.x.mean('member_id'), 'model', weights)
+            self.results['I_LE'] = self.x.var('member_id')
+            self.results['Ibar_LE'] = self.results['I_LE'].weighted(weights).mean('model')
+            self.results['T_LE'] = weighted_var(self.x, ('model', 'member_id'), weights)
+        else:
+            self.results['M_LE'] = self.x.mean('member_id').var('model')
+            self.results['I_LE'] = self.x.var('member_id')
+            self.results['Ibar_LE'] = self.results['I_LE'].mean('model')
+            self.results['T_LE'] = self.x.var(('model', 'member_id'))
         
-    def compute_FIT(self):
-        self.results['FIT'] = self.compute_fit()
-        self.results['M_FIT'] = self.results['FIT'].var('model')
-        self.results['I_FIT'] = (self.x.isel(member_id=0) - self.results['FIT']).var('time')
-        self.results['Ibar_FIT'] = self.results['I_FIT'].mean('model')
-        self.results['T_FIT'] = self.x.var(('model', 'member_id'))
+    def compute_FIT(self, weights_file=None):
+        if weights_file:
+            weights = xr.open_dataarray(weights_file)
+            self.results['FIT'] = self.compute_fit()
+            self.results['M_FIT'] = weighted_var(self.results['FIT'], 'model', weights)
+            self.results['I_FIT'] = (self.x.isel(member_id=0) - self.results['FIT']).var('time')
+            self.results['Ibar_FIT'] = self.results['I_FIT'].weighted(weights).mean('model')
+            self.results['T_FIT'] = weighted_var(self.x, ('model', 'member_id'), weights)
+        else:
+            self.results['FIT'] = self.compute_fit()
+            self.results['M_FIT'] = self.results['FIT'].var('model')
+            self.results['I_FIT'] = (self.x.isel(member_id=0) - self.results['FIT']).var('time')
+            self.results['Ibar_FIT'] = self.results['I_FIT'].mean('model')
+            self.results['T_FIT'] = self.x.var(('model', 'member_id'))
+        
+def weighted_var(ds, dim, weights):
+    mean = ds.weighted(weights).mean(dim)
+    var = ((ds - mean)**2).weighted(weights).mean(dim)
+    return var
