@@ -9,13 +9,72 @@ import psutil
 import xesmf as xe
 from tqdm import tqdm
 from fire import Fire
-from LE_LoadAndMerge import convert_calendar
 
 import dask
 
 dask.config.set({"distributed.workers.memory.spill": 0.90})
 dask.config.set({"distributed.workers.memory.target": 0.80})
 dask.config.set({"distributed.workers.memory.terminate": 0.98})
+
+def convert_calendar(ds, granularity: str):
+    """Convert to common calendar.
+
+    For "monthly", simply converts to numpy datetime objects and sets dates to first
+    of the month.
+
+    For "daily", converts all calendars to standard calendar. Leap years are ignored.
+    Error from this is assumed to be small.
+
+    Parameters
+    ----------
+    ds: xr.Dataset
+        CMIP model dataset in either daily or monthly resolution
+    granularity: str
+        Either "daily" or "monthly"
+
+    Returns
+    -------
+    ds: xr.Dataset
+        Same CMIP dataset with converted calendar
+
+    """
+
+    if granularity == 'daily':
+        if isinstance(ds.time.values[0], cftime.Datetime360Day):
+            # Whoever came up with this should smolder in hell
+            # The code below maps the 360 days to a 365 day calendar
+            new_times = []
+            for year in np.unique(ds.time.dt.year):
+                times360 = ds.sel(time=str(year)).time
+                delta = np.timedelta64(int(365 / 360 * 24 * 60), 'm')
+                new_time = np.arange(f'{year}-01-01', f'{year}-12-31',
+                                     delta, dtype='datetime64').astype('datetime64[D]')
+                new_time = new_time[:len(times360)]
+                new_times.append(new_time)
+            new_times = np.concatenate(new_times)
+            ds = ds.assign_coords({'time': new_times})
+#         if type(ds.time.values[0]) in [
+#             cftime.DatetimeNoLeap,
+#             cftime.DatetimeProlepticGregorian,
+#             cftime.DatetimeGregorian,
+#             cftime.DatetimeJulian
+#         ]:
+        else:
+            ds = ds.assign_coords({'time': ds.time.values.astype('datetime64[D]')})
+
+    elif granularity == 'monthly':
+        if not type(ds.time.values[0]) is np.datetime64:
+            new_time = [
+                np.datetime64(c.isoformat()[:10]).astype('datetime64[M]') for c in ds.time.values
+            ]
+        else:
+            new_time = ds.time.values.astype('datetime64[M]')
+        ds = ds.assign_coords({'time': new_time})
+
+    else:
+        raise NotImplementedError(f'Granularity {granularity} not implemented.')
+
+    return ds
 
 
 def regrid_ds(ds_in, dx):
@@ -60,7 +119,7 @@ def load_lens_cat(experiment_id, variable_id, table_id, source_id):
         cat = raw_cat.search(
             experiment=['RCP85','20C'],
             variable=['PRECL','PRECC'],
-            frequency=frequency
+            frequency=frequenc
             )
         raise NotImplementedError
     elif variable_id == 'pr' and table_id == 'day':
