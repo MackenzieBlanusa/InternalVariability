@@ -148,6 +148,23 @@ class MultiModelLargeEnsemble():
 #         x_hist = []
 #         x_future = []
         x = []
+        if x_type == 'quantile_return_raw':
+            hist_slice = slice('1995', '2014')
+            hist_all_models = []
+            for model in self.models:
+                hist_all_models.append(self.hist_dsets[model].sel(time=hist_slice))
+            
+            model_dim = xr.DataArray(self.models, coords={'model': self.models}, name='model')
+            hist = xr.concat(hist_all_models, dim=model_dim)
+
+            # find number of expected events in period covered by x
+            return_period = 10
+            expected_events = len(np.unique(hist.time.dt.year)) / return_period
+            q = 1 - expected_events / len(hist.time)
+            hist.load()
+            q_values = hist.quantile(q, ('time', 'member_id', 'model'))
+
+        i = 0
         for model in self.models:
             save_name = f'gcs://{self.bucket}/{self.path}/{name}/{model}.zarr'
             if load:
@@ -157,11 +174,17 @@ class MultiModelLargeEnsemble():
                 hist, future = self.hist_dsets[model], self.future_dsets[model]
                 if x_type == 'quantile_return':
                     out = self.compute_quantile_return(hist, future, **kwargs)
+                    print(i)
+                    i +=1
     #                 x_hist.append(out[0]); x_future.append(out[1])
                 elif x_type in ['mean', 'max']:
                     out = self.compute_avg_stat(hist, future, stat=x_type, **kwargs)
                 elif x_type == 'TXx_quantile':
                     out = self.compute_TXx_quantile_return(hist, future, **kwargs)
+                elif x_type == 'quantile_return_raw':
+                    out = self.compute_quantile_return(hist, future, **kwargs, q_values=q_values)
+                    print(i)
+                    i +=1
                 if name:
                     print('Saving:', save_name)
                     out.to_dataset().to_zarr(save_name, consolidated=True, mode='w')
@@ -175,8 +198,8 @@ class MultiModelLargeEnsemble():
         self.x = xr.concat(x, dim=model_dim)
     
     def compute_quantile_return(self, hist, future, return_period=10, consec_days=1, coarsen=1, 
-                                hist_slice=slice(None, None), 
-                                rolling_average=10
+                                hist_slice=slice(None, None),
+                                rolling_average=10, q_values=None,
                                ):
         hist = hist.sel(time=hist_slice)
         
@@ -192,27 +215,49 @@ class MultiModelLargeEnsemble():
         expected_events = len(np.unique(hist.time.dt.year)) / return_period
         q = 1 - expected_events / len(hist.time)
         
-        def quantile_func(da_hist, da_future):
-            q_values = da_hist.quantile(q, ('time', 'member_id'))
-            occ_hist = da_hist > q_values
-            occ_future = da_future > q_values
-            occ_future = occ_future.assign_coords({'q_values': q_values})
-            occ_hist = occ_hist.assign_coords({'q_values': q_values})
-            occ_hist = occ_hist.resample(time='AS').sum()
-            occ_future = occ_future.resample(time='AS').sum()
-            return occ_hist, occ_future
+        if not q_values:
+            def quantile_func(da_hist, da_future):
+                q_values = da_hist.quantile(q, ('time', 'member_id'))
+                occ_hist = da_hist > q_values
+                occ_future = da_future > q_values
+                occ_future = occ_future.assign_coords({'q_values': q_values})
+                occ_hist = occ_hist.assign_coords({'q_values': q_values})
+                occ_hist = occ_hist.resample(time='AS').sum()
+                occ_future = occ_future.resample(time='AS').sum()
+                return occ_hist, occ_future
+                
+            occ_hist, occ_future = loop_over_chunks(hist, future, quantile_func
+    #                                                 , client=self.client
+                                                )
             
-        occ_hist, occ_future = loop_over_chunks(hist, future, quantile_func
-#                                                 , client=self.client
-                                               )
-        
-        # Resample and average
-#         occ_hist = occ_hist.resample(time='AS').sum().rolling(time=rolling_average, center=True).sum()
-#         occ_future = occ_future.resample(time='AS').sum().rolling(time=rolling_average, center=True).sum()
-#         return occ_hist, occ_future
-        occ = xr.concat([occ_hist, occ_future], 'time')
-        occ = occ.rolling(time=rolling_average, center=True).sum()
-        return occ
+            # Resample and average
+    #         occ_hist = occ_hist.resample(time='AS').sum().rolling(time=rolling_average, center=True).sum()
+    #         occ_future = occ_future.resample(time='AS').sum().rolling(time=rolling_average, center=True).sum()
+    #         return occ_hist, occ_future
+            occ = xr.concat([occ_hist, occ_future], 'time')
+            occ = occ.rolling(time=rolling_average, center=True).sum()
+            return occ
+        else:
+            def quantile_func(da_hist, da_future):
+                occ_hist = da_hist > q_values
+                occ_future = da_future > q_values
+                occ_future = occ_future.assign_coords({'q_values': q_values})
+                occ_hist = occ_hist.assign_coords({'q_values': q_values})
+                occ_hist = occ_hist.resample(time='AS').sum()
+                occ_future = occ_future.resample(time='AS').sum()
+                return occ_hist, occ_future
+                
+            occ_hist, occ_future = loop_over_chunks(hist, future, quantile_func
+    #                                                 , client=self.client
+                                                )
+            
+            # Resample and average
+    #         occ_hist = occ_hist.resample(time='AS').sum().rolling(time=rolling_average, center=True).sum()
+    #         occ_future = occ_future.resample(time='AS').sum().rolling(time=rolling_average, center=True).sum()
+    #         return occ_hist, occ_future
+            occ = xr.concat([occ_hist, occ_future], 'time')
+            occ = occ.rolling(time=rolling_average, center=True).sum()
+            return occ
         
     def compute_avg_stat(self, hist, future, hist_slice=slice(None, None), rolling_average=10,
                          stat='mean'):
